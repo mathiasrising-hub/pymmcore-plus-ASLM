@@ -19,7 +19,7 @@ def jog(axis, distance, controller, boundary):
     
     #We define some variables to use later.
     ax = controller.axes[axis]
-    pos = ax.rpos
+    pos = ax.rpos()
     
     #We check if the movement exceeds the boundary threshold. If it does it's important that the movement doesn't start
     if not (boundary[axis,0] <= pos+distance <= boundary[axis,1]):

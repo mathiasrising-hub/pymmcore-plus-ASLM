@@ -7,6 +7,7 @@
 from pymmcore_plus import CMMCorePlus
 from pymmcore_plus.mda import MDAEngine
 import useq
+import tifffile
 import stages_movement
 
 class No_Stage(MDAEngine):
