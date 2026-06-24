@@ -6,7 +6,8 @@ import sys
 import numpy as np
 import subprocess as sp
 #This document has all the functions related to stage movement.
-
+controller = Controller(contype='ethernet',n_axes=3)
+controller.connect()
 #We want to define a jog movement. This is a relative move, which moves a set distance in a given axes.
 #The axis is an integer value from 0-2 (0 = x axis, 1 = y axis, 2 = z axis)
 def jog(axis, distance, controller, boundary):
