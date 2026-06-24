@@ -1,6 +1,7 @@
 
 from acspy import acsc
 from acspy.control import Controller
+import threading
 import time
 import sys
 import numpy as np
@@ -19,18 +20,12 @@ def jog(axis, distance, controller, boundary):
     
     #We define some variables to use later.
     ax = controller.axes[axis]
-    pos = ax.rpos()
+    pos = ax.rpos
     
     #We check if the movement exceeds the boundary threshold. If it does it's important that the movement doesn't start
     if not (boundary[axis,0] <= pos+distance <= boundary[axis,1]):
         print('Movement exceeds boundary!')
         return
-    
-    #We enable the axis if it isn't enabled already.
-    if ax.enabled==False:
-        ax.enable()
-        #A timer is applied here, as there is a short delay from enabling the stage to the stage being able to move
-        time.sleep(0.5)
     
     #ax.ptpr is a relative move (jog). We send a signal to move the distance given in the function. 
     ax.ptpr(distance)

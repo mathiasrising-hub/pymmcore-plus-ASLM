@@ -33,12 +33,15 @@ class Z_Stack(MDAEngine):
         self.controller = controller
         self.step_size = step_size
         self.bound = boundary
+        controller.axes[2].enable()
     def z_move(self, metadata: dict) -> none:
         stages_movement.jog(2, self.step_size, self.controller, self.bound)
     def setup_event(self, event: useq.MDAEvent) -> None:
         print(f"--- Event start ---")
         print('setup')
+        self.z_move(event.metadata)
         super().setup_event(event)
+        
         # do some custom post-setup
         
     def exec_event(self, event: useq.MDAEvent) -> object:
@@ -46,7 +49,6 @@ class Z_Stack(MDAEngine):
         # do some custom pre-execution
         result = super().exec_event(event)
         print('exec')
-        self.z_move(event.metadata)
         # do some custom post-execution
         return result 
 '''
