@@ -12,7 +12,7 @@ controller.connect()
 #We want to define a jog movement. This is a relative move, which moves a set distance in a given axes.
 #The axis is an integer value from 0-2 (0 = x axis, 1 = y axis, 2 = z axis)
 def jog(axis, distance, controller, boundary):
-    
+    t_start = time.perf_counter()
     #First off we check if the axis is valid. Since we have a XYZ stage, it should be an integer between 0-2
     if axis not in (0,1,2):
         print('Not a valid axis!')
@@ -28,12 +28,16 @@ def jog(axis, distance, controller, boundary):
         return
     
     #ax.ptpr is a relative move (jog). We send a signal to move the distance given in the function. 
-    ax.ptpr(distance)
+    t_middle_0 = time.perf_counter()
+    acsc.toPoint(controller.hc,0,2,pos+distance)
+    t_middle_1 = time.perf_counter()
     #Now we want to check if the movement has stopped, and when it has stopped we want to inform the position and exit the function
     while True:
-        if ax.in_position:
+        if acsc.getMotorState(controller.hc,2)['in position']:
+            t_end = time.perf_counter()
+            print(f"Stages took {(t_end-t_start)*1000} to move. Code before move: {(t_middle_0-t_start)*1000}. Code after move:  {(t_end-t_middle_1)*1000}")
             break
-    print('Movement has finished. from position,',pos,'to',ax.rpos)
+    #print('Movement has finished. from position,',pos,'to',ax.rpos)
     return
 
 
