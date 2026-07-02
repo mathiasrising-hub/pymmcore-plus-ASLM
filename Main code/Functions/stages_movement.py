@@ -11,8 +11,17 @@ controller = Controller(contype='ethernet',n_axes=3)
 controller.connect()
 #We want to define a jog movement. This is a relative move, which moves a set distance in a given axes.
 #The axis is an integer value from 0-2 (0 = x axis, 1 = y axis, 2 = z axis)
+def get_pos(controller):
+    ax0 = controller.axes[0]
+    pos0 = ax0.rpos
+    ax1 = controller.axes[1]
+    pos1 = ax1.rpos
+    ax2 = controller.axes[2]
+    pos2 = ax2.rpos
+    return [pos0, pos1, pos2]
+
 def jog(axis, distance, controller, boundary):
-    t_start = time.perf_counter()
+    #t_start = time.perf_counter()
     #First off we check if the axis is valid. Since we have a XYZ stage, it should be an integer between 0-2
     if axis not in (0,1,2):
         print('Not a valid axis!')
@@ -28,16 +37,30 @@ def jog(axis, distance, controller, boundary):
         return
     
     #ax.ptpr is a relative move (jog). We send a signal to move the distance given in the function. 
-    t_middle_0 = time.perf_counter()
-    acsc.toPoint(controller.hc,0,2,pos+distance)
-    t_middle_1 = time.perf_counter()
+    #t_middle_0 = time.perf_counter()
+    acsc.toPoint(controller.hc,0,axis,pos+distance)
+    #t_middle_1 = time.perf_counter()
+    '''
     #Now we want to check if the movement has stopped, and when it has stopped we want to inform the position and exit the function
+    positions = []
     while True:
-        if acsc.getMotorState(controller.hc,2)['in position']:
-            t_end = time.perf_counter()
-            print(f"Stages took {(t_end-t_start)*1000} to move. Code before move: {(t_middle_0-t_start)*1000}. Code after move:  {(t_end-t_middle_1)*1000}")
+        state = acsc.getMotorState(controller.hc, axis)
+        positions.append((time.perf_counter(), acsc.getRPosition(controller.hc, axis)))
+        if state['in position']:
             break
+
+    for t, p in positions:
+        print(f"{(t-t_middle_1)*1000:.2f}ms: {p}")
     #print('Movement has finished. from position,',pos,'to',ax.rpos)
+    '''
+    TARGET = pos + distance
+    TOLERANCE = 0.0000001 
+
+    while True:
+        current_pos = acsc.getRPosition(controller.hc, 2)
+        if abs(current_pos - TARGET) <= TOLERANCE:
+            break
+        time.sleep(0.00001)
     return
 
 
@@ -90,6 +113,7 @@ def move_to(coordinates, controller, boundary):
             break
     print('Movement has finished. from position,',pos,'to',[ax_x.rpos, ax_y.rpos, ax_z.rpos])
     return
+
 
 
 
