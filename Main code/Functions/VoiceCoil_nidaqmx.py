@@ -14,7 +14,7 @@ warnings.simplefilter("ignore", nidaqmx.errors.DaqResourceWarning)
 # In[6]:
 
 
-class DAQ:
+class VoiceCoil_nidaqmx:
     '''
     Descriptive text last updated: 6/30/2026. Code by the Bewersdorf lab - Mathias Rising main author.
     
@@ -35,7 +35,7 @@ class DAQ:
         self,
         name: str = "Dev1/",
         mirror_neutral_v: float = 0.725,
-        cali_path: str = "E:\\2026-06-03\\calibration files\\calibration files_1fps_24ms",
+        cali_path: str = "E:\\2026-6-17\\calibration file_1fps_24ms_2",
         sample_rate: float = 10000
         ):
         #This is a currently unused definition to check if the setup has run. Later implemenation will add it to make sure DAQ doesn't run without proper setup.
@@ -208,6 +208,7 @@ class DAQ:
     # This is the main function that programs all the outputs of the DAQ. 
     def program_waveforms(
         self,
+        stack_height: int,
         channels: str = ['488'], #The channels used
         cameras: int = 1, #How may cameras are in use
         meta: int = 1 #How many times the acqusition should run
@@ -279,7 +280,10 @@ class DAQ:
         # Now we define the counter. The frequency is the one that decides the timing. This is calculated automatically as long as the calibration file and sample rate is set correctly
         #Next we set the timing to be continuous. THis means that it will run until stopped. Optimally later we may want to add it to be finite. 
         self._task_co.co_channels.add_co_pulse_chan_freq(co_address, name_to_assign_to_channel='pulse_gen', freq=frequency, duty_cycle=0.1)
-        self._task_co.timing.cfg_implicit_timing(nidaqmx.constants.AcquisitionType.CONTINUOUS)
+        self._task_co.timing.cfg_implicit_timing(
+            nidaqmx.constants.AcquisitionType.FINITE,
+            stack_height
+                                                 )
         
 
         #Now we define the analog output channel
@@ -312,7 +316,7 @@ class DAQ:
                     self._do_lines += f",{self._dev_name}{getattr(self,f"_address_do_{chan}")}"
             self._task_do = nidaqmx.Task()
             self._task_do.do_channels.add_do_chan(self._do_lines,line_grouping=nidaqmx.constants.LineGrouping.CHAN_PER_LINE)
-            self._task_do.timing.cfg_samp_clk_timing(100,
+            self._task_do.timing.cfg_samp_clk_timing(1000,
                                     source = '/Dev1/Ctr0InternalOutput',
                                     sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
             self._task_do.write(self._do_waveform, False)

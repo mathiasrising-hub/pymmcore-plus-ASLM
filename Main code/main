@@ -1,0 +1,30 @@
+# %%
+
+from Functions.VoiceCoil_nidaqmx import VoiceCoil_nidaqmx
+from Functions.Acquisition import Acquisition
+from Functions.stages_movement import stages_movement
+
+def run(
+):
+    DAQ = VoiceCoil_nidaqmx()
+    stage = stages_movement()
+    MDA = Acquisition(stage,DAQ)
+    return DAQ, stage, MDA
+
+if __name__ == '__main__':
+    DAQ, stage, MDA = run()
+# %%
+MDA.save = True
+MDA.exposure = 0.44
+DAQ.cali_path = "E:\\2026-6-17\\calibration file_5fps_24ms_2"
+MDA.setup_sequence(z_depth = 0.1, x_tiles = 2, y_tiles = 2, channels = ['488','560'])
+print(MDA._stack_height)
+
+# %%
+MDA.run_sequence()
+
+# %%
+MDA.stop_sequence()
+
+# %%
+stage.move_home()
