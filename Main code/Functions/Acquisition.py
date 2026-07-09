@@ -23,64 +23,232 @@ mmc = None
 
 
 class Acquisition:
- 
+    '''Class: Acquisition
+    This it the main class used to control the acquisition of images. It calls the 2 other classes, stages_movement and DAQ.
+    The main function of this class is to set up the acquisition parameters, start the acquisition, and save the images. It also handles the movement of the stages and the DAQ.
+    The class is designed in 3 different parts:
+    1.
+    This code is designed to be able to configure and setup each of the giving parameters used in the microscope. 
+    This includes but are not limited to: The camera, the save location and name, the DAQ, home and boundary of tge stages etc.
+    2.
+    This code is the main operator when it comes to the acquisition. This means it control whenever the acquisition should start, stop, pause etc.
+    The code is also the main operator for fail safes implementation. This includes logging each images parameters and timing, to be able to debug issues
+    3.
+    Saving the images. Right now this code uses big tiff as a file format. This can be changed by changing the package from tifffile to another package and of course updating the syntax in the saving function.
+    It also has default saving operation and naming operation, to ensure files are not overwritten, and a logical naming convention. 
+    It also has a queue system to ensure that the saving is not lagging behind the acquisition. This is important to ensure that the acquisition is not stopped due to saving issues.
+    And lastly the system is running on a seperate thread to ensure that the acquisition is not slowed down if saving has issues, or large files. 
+    This is furthermore improved by using a pause when the stages move tiles. This ensures that the saving does not lag too far behind.
+
+    This descriptive text is last editet 09-08-2026 by Mathias Rising
+    Main Author: Mathias Rising
+    Created for the Bewersdorf lab and the pan-ASLM microscope.
+    '''
     def __init__(
         self,
-        stages_movement,
-        DAQ,
-        config_path: str = r"\Users\Hannah\Desktop\configuration\PVCAM_only.cfg"
+        stages_movement, #This is the class that controls the stages. 
+        DAQ, #This is the class that controls the DAQ.
+        config_path: str = r"\Users\Hannah\Desktop\configuration\PVCAM_only.cfg" #The configuration path. For now it's hard coded, though this can be changed to be a parameter in the future.
     ):
         
         # Set the first instance of this class as the global singleton
-        global mmc
+        global mmc #This is made a global variable purely for debugging purposes. It can be used to check the status of the micro manager core
         if mmc is not None:
-            mmc.unloadAllDevices()
+            mmc.unloadAllDevices() #We want to make sure, if there is a previous instance of the core, that it is unloaded before we start a new one. This is to avoid issues with lingering devices.
         if mmc is None:
-            mmc = CMMCorePlus.instance()
+            mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
+        
+        #This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
         mmc.enableDebugLog(True)
+
         # Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
         mmc.loadSystemConfiguration(config_path)
+        
+        #The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
         mmc.setAutoShutter(False)
-        #settings needed to set up the DAQ
+
+
+        #Now we name the other classes to be used in the class. They are of course also set to instance variables to ensure use in the entire class
         self.stages_movement = stages_movement
         self.DAQ_VC = DAQ
         
         
-        #Setup the default Camera settings for 1 fps rolling shutter.
-        self._exposure  = 2.44
-        self._scan_width = 8
-        self._scan_direction = 'Up'
-        self._trigger  = 'Edge Trigger'
-        self._Port = 'Dynamic Range'
-        self._setup = False
-        self._sequence = None
-        self._cali_path = self.DAQ_VC.cali_path
-        self._stack_height = 1
-        self._X = 1
-        self._current_X = 1
-        self._current_Y = 1
-        self._Y = 1
-        self._meta = 1
-        self._channels = ['488']
-        self._cameras = 1
-        self._frames = 1
-        self._filename = 'Zstack'
-        self._foldername = 'Default'
-        self._save = False
-        self._z_stepsize = 0.0002
-        self._silence = False
-        self._tiles = 0
-        self._pause_duration = 2
-        self._start_pos = []
-        self._tile_move = 0.608
-        self._move_forward = True
-        self._queue = None
-        self._stop_thread = None
-        self._save_thread = None
-        self._lag_limit = None
-        self._disk = Path('E:')
+        #Setup the default Camera settings for 1 fps rolling shutter. In the future this should probably be loaded as a config file, to make it easy to change the settings. But for now it is hard coded.
+        self._exposure  = 2.44 #Exposure of the camera in ms. Correct exposure for 24 ms flyback can be found in the manual for the microscope.
+        self._scan_width = 8 #Scan width of the rolling shutter. Default is 8 for higher intensity. 4 is diffraction limited and should be used for imaging.
+        self._scan_direction = 'Up' #Scan direction of the rolling shutter. Down is default for the camera, so this should always be changed to up, UNLESS the scan direction is cahnged for the voice coil. (Current setup is min V to max V)
+        self._trigger  = 'Edge Trigger' #The trigger mode. The setup is currently only setup to work in hardware trigger mode. If live features are implemented it should proabably be set to internal trigger.
+        self._Port = 'Dynamic Range' #The port of the camera. Sensitivity is the default for live. Dynamic range is the default for imaging.
+        
+        #Booleans to check waht code has run. 
+        self._setup = False #This is an instance boolean variable to ensure that proper setup is done before acquiring images. This is to make sure that the user does not damage devices by not setting them up beforehand.
+        self._sequence = None # This is an old check for sequencing. Should be deleted unless it is used in the future. It is currently not used anywhere in the code.
+        
+        #DAQ variables
+        self._cali_path = self.DAQ_VC.cali_path # This is the current calibration file in use. Currently the calibration file is hard coded in the DAQ class, but it should be changed to be a parameter in the future. The calibration is deciding the framerate in the DAQ class. 
+        self._channels = ['488'] # Different colors of lasers. This is also used in the DAQ, but keep in mind it is also used for saving purposes.
+
+        #Acquisition parameters. These are calculated or inputted by the user, so are just set to a single image in the initiation.
+        self._X = 1 # Number of tiles in the X direction
+        self._Y = 1 # Number of tiles in the Y direction
+        self._meta = 1 # Number of repitions. Currently not correctly implemented.
+        self._cameras = 1 # Number of cameras. Currently not correctly implemented.
+        self._filename = 'Zstack' # Default filename for saving. This can be changed by the user in the setup_sequence function.
+        self._foldername = 'Default' # If the foldername is set to default the foldername is just the date. 
+        self._save = False # Boolean to check if saving is enabled. The default should be False, and saving should only occur if the user wishes to save. This is to ensure that the user does not accidentally save images and fill up the disk.
+        self._z_stepsize = 0.0002 # Z step size in mm. This is the distance between each slice in the Z stack. The default is 0.2 um.
+        self._silence = False # Currently not implemented. The intended function is to turn on and off printing valuable debugging information to track acquisition in real time. Default should be False to ensure smooth user experience.
+        self._pause_duration = 2 #Pause duration in seconds. This time can be adjusted, which are important if pause duration is found out to affect image quality. Remember there is an additional pause time to catch up to saving. This pause is seperate from that.
+        self._lag_limit = None # The lag limit of the saving thread. This number should be reasonable. NB: If there actually is lagging behind there is a problem with the speed or saving. This is a failsafe. If this actually triggers there may be something wrong.
+        self._disk = Path('E:') # The disk to save the images to. Currently hard coded to the computer in use.
 
         
+        # Instance variables defined. Should not be changed by the user. These are mostly used for counting purposes.
+        self._stack_height = 1 # Stack height is the number of total slices in a Z stack
+        self._frames = 1 # Total number of frames to be acquired. This is calculated from the other parameters.
+        self._idx_frame = 0 # Current frame index. This is used to keep track
+        self._current_X = 1 # Current tile in the X direction
+        self._current_Y = 1 # Current tile in the Y direction
+        self._tiles = 0 # Total number of tiles to be acquired. This is calculated from the other parameters.
+        self._stack = 0 # Current stack index. This is used to keep track of the current stack being acquired. This is used for saving purposes.
+        self._idx_slice = 0 # Current slice index. This is used to keep track of the current slice being acquired. This is used for saving purposes.
+        self._start_pos = [] # This is the starting position of the stages. This is used to keep track of the current position of the stages. This is used for moving the stages to the correct position for each tile.
+        self._tile_move = 0.608 # This is the distance that the stages will move for a tile. A tile is 640 um, and the default overlap is 5%
+        self._move_forward = True # This is to make sure the stages move in the correct direction. The tiling can be found in the manual.
+        self._queue = None #This is the queu that every image is popped into using mmc.popNextImage. 
+        self._stop_thread = None # This is a parameter defined as an event, with the purpose of stopping the saving thread. 
+        self._save_thread = None # This is the saving thread. 
+    @property
+    def channels(self) -> list:
+        # The channels (laser colors) used for acquisition. Example: ['488'] or ['488', '560']. 
+        # This is used both for DAQ control and saving purposes.
+        return getattr(self, "_channels", None)
+    @channels.setter
+    def channels(self, value: list):
+        self._channels = value
+
+    @property
+    def X(self) -> int:
+        # Number of tiles in the X direction. Default is 1.
+        return getattr(self, "_X", None)
+    @X.setter
+    def X(self, value: int):
+        self._X = value
+
+    @property
+    def Y(self) -> int:
+        # Number of tiles in the Y direction. Default is 1.
+        return getattr(self, "_Y", None)
+    @Y.setter
+    def Y(self, value: int):
+        self._Y = value
+
+    @property
+    def meta(self) -> int:
+        # Number of repetitions of the acquisition. Currently not correctly implemented. Default is 1.
+        return getattr(self, "_meta", None)
+    @meta.setter
+    def meta(self, value: int):
+        self._meta = value
+
+    @property
+    def cameras(self) -> int:
+        # Number of cameras in use. Currently not correctly implemented. Default is 1.
+        return getattr(self, "_cameras", None)
+    @cameras.setter
+    def cameras(self, value: int):
+        self._cameras = value
+
+    @property
+    def filename(self) -> str:
+        # The filename used for saving. Default is 'Zstack'.
+        # Can be changed by the user before acquisition.
+        return getattr(self, "_filename", None)
+    @filename.setter
+    def filename(self, value: str):
+        self._filename = value
+
+    @property
+    def foldername(self) -> str:
+        # The foldername used for saving. 
+        # If set to 'Default', the foldername will be the current date.
+        return getattr(self, "_foldername", None)
+    @foldername.setter
+    def foldername(self, value: str):
+        self._foldername = value
+
+    @property
+    def z_stepsize(self) -> float:
+        # The step size between each slice in the Z stack, in mm. Default is 0.0002 mm (0.2 um).
+        return getattr(self, "_z_stepsize", None)
+    @z_stepsize.setter
+    def z_stepsize(self, value: float):
+        self._z_stepsize = value
+
+    @property
+    def silence(self) -> bool:
+        # Currently not implemented. Intended to toggle printing of debugging information.
+        # Default is False to ensure debugging information is printed.
+        return getattr(self, "_silence", None)
+    @silence.setter
+    def silence(self, value: bool):
+        self._silence = value
+
+    @property
+    def pause_duration(self) -> float:
+        # The pause duration in seconds between tiles. Default is 2 seconds.
+        # This is separate from the additional pause used to catch up to saving.
+        # Adjust if pause duration is found to affect image quality.
+        return getattr(self, "_pause_duration", None)
+    @pause_duration.setter
+    def pause_duration(self, value: float):
+        self._pause_duration = value
+
+    @property
+    def lag_limit(self) -> int:
+        # The maximum allowed lag of the saving thread in number of frames.
+        # If this triggers, there may be an issue with saving speed.
+        # Default is None, meaning no limit is set.
+        return getattr(self, "_lag_limit", None)
+    @lag_limit.setter
+    def lag_limit(self, value: int):
+        self._lag_limit = value
+
+    @property
+    def disk(self) -> Path:
+        # The disk to save images to. Default is Path('E:').
+        return getattr(self, "_disk", None)
+    @disk.setter
+    def disk(self, value: Path):
+        self._disk = Path(value)
+
+    @property
+    def scan_direction(self) -> str:
+        # The scan direction of the rolling shutter. Default is 'Up'.
+        # Should always be 'Up' unless the scan direction of the voice coil is changed.
+        return getattr(self, "_scan_direction", None)
+    @scan_direction.setter
+    def scan_direction(self, value: str):
+        self._scan_direction = value
+
+    @property
+    def trigger(self) -> str:
+        # The trigger mode of the camera. Default is 'Edge Trigger'.
+        # The setup is currently only configured to work in hardware trigger mode.
+        return getattr(self, "_trigger", None)
+    @trigger.setter
+    def trigger(self, value: str):
+        self._trigger = value
+
+    @property
+    def Port(self) -> str:
+        # The port of the camera. Default is 'Dynamic Range'.
+        # 'Sensitivity' is recommended for live imaging, 'Dynamic Range' for acquisition.
+        return getattr(self, "_Port", None)
+    @Port.setter
+    def Port(self, value: str):
+        self._Port = value
+            
     @property
     def save(self) -> bool:
         return getattr(self,"_save",None)
@@ -109,15 +277,23 @@ class Acquisition:
     def cali_path(self, value: str):
         self.DAQ_VC.cali_path = value
         self._cali_path = self.DAQ_VC.cali_path            
-    
+
+
+
+
     def connect_stages(self):
+        # This functions purpose is to connect to the stages if for some reason there is a disconnect.
+        # If a disconnect happens, the program should probably be restarted, but this is defined primarily for future crash security.
+        # The idea is to implement if the stages are disconnected, then the program will try to reconnect and continue from where it left off
         self.stages_movement.connect_controller()
-    
+
+
     def _pause(
         self,
         duration: float = None
     ):
-        
+        # This is the pause function used to move tiles and pause between tiles. 
+        # The current theory is that the gel needs time to settle, so after moving it should have a small delay
         if duration is not None:
             self._pause_duration = duration
         mmc.stopSequenceAcquisition()
