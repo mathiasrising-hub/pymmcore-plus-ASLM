@@ -251,6 +251,8 @@ class Acquisition:
             
     @property
     def save(self) -> bool:
+        # This property is to enable and disable saving of the images. 
+        # This should be enabled if the images should be saved.
         return getattr(self,"_save",None)
     @save.setter
     def save(self, value: bool):
@@ -258,6 +260,10 @@ class Acquisition:
 
     @property
     def exposure(self) -> float:
+        # Setting the exposure of the camera. 
+        # Remember, for rolling shutter the exposure time should be set in accordance to the table in the manual.
+        # The exposure time is dependent on the scan width and the flyback time. 
+        # Of course it is also dependent on the calibration file and framerate.
         return getattr(self,"_exposure",None)
     @exposure.setter
     def exposure(self, value: float):
@@ -265,6 +271,7 @@ class Acquisition:
     
     @property
     def scan_width(self) -> int:
+        # The scan width of the rolling shutter. 
         return getattr(self,"_scan_width",None)
     @scan_width.setter
     def scan_width(self, value: int):
@@ -272,6 +279,7 @@ class Acquisition:
         
     @property
     def cali_path(self) -> str:
+        # The path to the calibration file.
         return getattr(self,"_cali_path",None)
     @cali_path.setter
     def cali_path(self, value: str):
@@ -292,12 +300,23 @@ class Acquisition:
         self,
         duration: float = None
     ):
+        # This function is an instance function.
         # This is the pause function used to move tiles and pause between tiles. 
         # The current theory is that the gel needs time to settle, so after moving it should have a small delay
+        # The pause duration can be set before the acquisition.
+        # There also is a pause to catch up to saving, if the saving is lagging behind. This is a failsafe to ensure that the acquisition does not stop due to saving issues.
         if duration is not None:
             self._pause_duration = duration
+        
+        #MIGHT BE CHANGED. KEEP IN MIND.
+        # We start off by stopping the sequence acquisition and the DAQ.
+        # This is to ensure that no images are taken and the callback function isn't called while stages are moving.
         mmc.stopSequenceAcquisition()
         self.DAQ_VC.stop()
+
+        # We now check if we are at the last tile in the X direction. 
+        # If we are not, we move to the next tile in the X direction. 
+        # If we are, we move to the next tile in the Y direction and change the direction of movement in the X direction.
         if self._current_X < self._X:
             self._current_X += 1
             if self._move_forward:
@@ -310,14 +329,25 @@ class Acquisition:
             self._move_forward = not self._move_forward
             self._start_pos[1] = self._start_pos[1] + self._tile_move
 
+        #We not move to the position of the next tile
+        # Improvement: This should be changed to not redefining the self._start_pos, but have a seperate one. 
+        # This is to ensure we know exactly where it started from, so it is easier to move back. 
         self._move_to(self._start_pos)
+
+        #Now we actually pause the function. 
+        # Since _move_to is not a blocking function, this will pause the script while the stages are moving.
         time.sleep(self._pause_duration)
 
+        #Lastly we check if the saving is lagging behind. 
+        # If it is, then we pause the function and wait till it's caught up.
+        # NB: There should be implemented a timeout to make sure that it's not stuck indefinetly if the saving thread is stuck for some reason.
         if self._queue.qsize() > self._lag_limit:
             print('Saving is lagging behind. Stopping acquisition until caught up to limit...')
             while self._queue.qsize() > self._lag_limit:
                 time.sleep(0.001)
             print('Saving is caught up!')
+
+        # Now we start the sequence acquisition and the DAQ again.
         mmc.startSequenceAcquisition(
             self._stack_height,
             0,
@@ -331,6 +361,13 @@ class Acquisition:
         tif,
         image
     ):
+        '''
+        This function is an instance function. 
+        This function is called by the saving thread.
+        This function works very simply by writing the image in the tiff file. 
+        It then checks if then checks if we are at the end of the stack.
+        If we are, then the tiff file is closed and new tiffiles for each channels are opened.
+        '''
         tif.write(image, photometric='minisblack')
         if self._idx_slice >= self._stack_height:
             self._stack += 1
@@ -344,6 +381,16 @@ class Acquisition:
     def _saving_thread(
         self
     ):
+        '''
+        This function is an instance function.
+        This is the main thread used for saving.
+        The main method is to set up a while loop that checks if the stop condition is set.
+        Then it gets the last image from the queue.
+        Then it calls the _saving function and increases the counter for idx_slice and the chan_idx is defined from that one.
+        Afterwards, some information about timing and slice nr and such is written in the log.
+        There is a if statement that checks for every 100 images it does a flush, which means it writes into the log from the buffer to make sure it never clutters up.
+        Lastly there are some exceptions, mostly for if error happens, or if there is no image in the queue.
+        '''
         while self._stop_thread.is_set() == False:
             try:
                 t1 = time.perf_counter()
@@ -360,6 +407,7 @@ class Acquisition:
                         self._file_save.flush()
                 except Exception as e:
                     print(f"Error happened in the saving thread: {e}")
+                    self._file_save.write(f"Error happened in the saving thread: {e}")
                     self._stop_thread.set()
                     break
                 finally:
@@ -375,6 +423,18 @@ class Acquisition:
     def _acquire(
             self
     ):
+        '''
+        This is an instance function.
+        The function is used as a callback function for the DAQ class. 
+        Specifically the DAQ class calls to this function whenever the camera is done acquiring an image.
+        The purpose of this functin is to acquire an image and put it into the queue. 
+        Afterwards as long as none of the stage triggers are true, the code exits and wait for the next trigger.
+        
+        This code also functions as stage cotnrol. 
+        More specifically it "Jogs" (single axis relative move) the stage when all channels have been acquired.
+        It also calls the _pause function when the Zstack is done. This moves to the next tile. 
+        Lastly if all the frames has been taken it stops the acquisition. 
+        '''
         tt = time.perf_counter()
         ttt = tt
         while True:
@@ -414,6 +474,13 @@ class Acquisition:
         self,
         disk: str = None
     ):    
+        '''
+        This is an instance function.
+        The main purpose of this is to setup the saving location of the tiff files. 
+        Furthermore it defines the name of the tiff files. 
+
+        Lastly this is the code that defines the queue size and the threads used to save
+        '''
         if disk == None:
             self._disk = Path('E:')
         else:
@@ -439,6 +506,10 @@ class Acquisition:
     def _save_path(
         self
     ):
+        '''
+        This is an instance function. 
+        Its main purpose is to define the save path and make the folder.
+        '''
         today =datetime.datetime.now()   # Get date
         self._datestring = today.strftime("%Y-%m-%d")  # Date to the desired string format
         Path(self._datestring).mkdir(parents=True, exist_ok=True)   # Create folder
@@ -446,11 +517,20 @@ class Acquisition:
     def _set_callback(
         self
     ):
+        '''
+        This is an instance function
+        The main purpose is to define the callback function of the DAQ. 
+        Importantly this should be done even if saving is not enabled, as it controls timing of everything.
+        '''
         self.DAQ_VC.register_save(self._acquire)
         
     def setup_save(
         self
     ):
+        '''
+        This is a function to setup saving.
+        It just calls the callback function and if saving is enabled it uses the save path.
+        '''
         self._set_callback()
         if self._save is False:
             print('Saving is not enabled!')
@@ -460,6 +540,12 @@ class Acquisition:
         
         
     def _setup_camera(self):
+        '''
+        this is an instance function.
+        This function sets up the parameters for all the cameras. 
+        It is assumed that all cameras want the same settings.
+        If this is not the case in the future (as only 1 camera is in use now), then the code needs to be changed
+        '''
         for i in range(self._cameras):
             mmc.setProperty(f"Camera-{i+1}",'Exposure',self._exposure),
             mmc.setProperty(f"Camera-{i+1}",'TriggerMode',self._trigger)
@@ -469,10 +555,19 @@ class Acquisition:
             mmc.setProperty(f"Camera-{i+1}",'Port',self._Port)
             
     def _calculate_frames(self):
+        '''
+        This is an instance function.
+        It is simply a function which calculates the frames
+        '''
         self._frames = self._stack_height * self._X * self._Y * self._meta * self._cameras
         self._tiles = self._X * self._Y
     
     def _setup_daq(self):
+        '''
+        This is an instance function. 
+        This calls the DAQ class to define the waveforms.
+        This does not start the waveforms, only defines them
+        '''
         self.DAQ_VC.program_waveforms(self._stack_height, self._channels)
     
     def setup_sequence(
@@ -488,11 +583,14 @@ class Acquisition:
         saving: bool = None,
         silence: bool = None,
         filename: str = None,
-        foldername: str = None,        
-        keep_save_on: bool = False,
+        foldername: str = None,
         lag_limit: int = None
     ):
-        
+        '''
+        This is a function that is supposed to be called by the user. 
+        First off it starts by checking every input parameter.
+        If a parameter is defined by the user, it will be modified. 
+        '''
         if z_stepsize is not None:
             self._z_stepsize = z_stepsize
         if x_tiles is not None:
