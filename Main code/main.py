@@ -28,3 +28,6 @@ MDA.stop_sequence()
 
 # %%
 stage.move_home()
+
+# %%
+print(MDA._frames)

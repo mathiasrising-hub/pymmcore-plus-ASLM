@@ -78,6 +78,7 @@ class Acquisition:
         self._stop_thread = None
         self._save_thread = None
         self._lag_limit = None
+        self._disk = Path('E:')
 
         
     @property
@@ -119,6 +120,7 @@ class Acquisition:
         
         if duration is not None:
             self._pause_duration = duration
+        mmc.stopSequenceAcquisition()
         self.DAQ_VC.stop()
         if self._current_X < self._X:
             self._current_X += 1
@@ -140,6 +142,11 @@ class Acquisition:
             while self._queue.qsize() > self._lag_limit:
                 time.sleep(0.001)
             print('Saving is caught up!')
+        mmc.startSequenceAcquisition(
+            self._stack_height,
+            0,
+            True
+        )
         self.DAQ_VC.start()
         
     
@@ -155,7 +162,8 @@ class Acquisition:
             for chan in self._channels:
                 getattr(self, f"_tif{chan}").close()
                 if self._stack < self._tiles:
-                    setattr(self,f"_tif{chan}",tiff.TiffWriter(f"{self._tif_path}{self._stack:05d}{chan}.tif",bigtiff=True))
+                    setattr(self, f"_tif{chan}", tiff.TiffWriter(
+                    str(self._tif_path) + f"{self._stack:05d}{chan}.tif", bigtiff=True))
     
     def _saving_thread(
         self
@@ -165,13 +173,14 @@ class Acquisition:
                 t1 = time.perf_counter()
                 image = self._queue.get(timeout = self._pause_duration+2)
                 try:
+                    t1 = time.perf_counter()
                     self._idx_slice += 1
                     chan_idx = (self._idx_slice - 1) % len(self._channels)
                     tif = getattr(self, f"_tif{self._channels[chan_idx]}")
                     self._saving(tif,image)
                     t2 = time.perf_counter()
                     self._file_save.write(f"Time: {t2-self._tstart}. Slice nr: {self._idx_slice} channel: {self._channels[chan_idx]} took {t2-t1}\n")
-                    if self._idx_frame % 100 == 0:
+                    if self._idx_slice % 100 == 0:
                         self._file_save.flush()
                 except Exception as e:
                     print(f"Error happened in the saving thread: {e}")
@@ -195,6 +204,11 @@ class Acquisition:
         while True:
             if mmc.getRemainingImageCount() > 0:
                 image = mmc.popNextImage()
+                if self._idx_frame % 100 == 0:
+                    self._file_acquire.write(
+                        f"Buffer free: {mmc.getBufferFreeCapacity()} / "
+                        f"{mmc.getBufferTotalCapacity()}\n"
+                    )
                 if self._save:
                     self._queue.put(image)
                     print('Image recieved')
@@ -210,29 +224,38 @@ class Acquisition:
             if ttt-tt >= 1:
                 print('Timeout: _acquire')
                 break
-
-        if self._idx_frame >= self._frames or mmc.isSequenceRunning() == False:
-            self.stop_sequence()
-            return print('Acquisition done!')
-        if self._idx_frame % self._stack_height == 0:
+        if self._idx_frame % self._stack_height == 0 and self._idx_frame < self._frames:
             self._pause()
+        if self._idx_frame >= self._frames or mmc.isSequenceRunning() == False:
+            self._file_acquire.write(f"Time: {ttt-self._tstart}. Status of stopping Acquisition: Sequence running? {mmc.isSequenceRunning()}. Frames taken vs total frames: {self._idx_frame} vs {self._frames}\n")
+            self.stop_sequence()
+            return
+
     
 
     
     def _setup_tiff(
-        self
+        self,
+        disk: str = None
     ):    
+        if disk == None:
+            self._disk = Path('E:')
+        else:
+            self._disk = disk
         today =datetime.datetime.now()
         if self._foldername == 'Default':
             time_m_s = today.strftime("%H_%M")
-            Path(f"{self._datestring}\\{time_m_s}").mkdir(parents=True, exist_ok=True)
-            self._tif_path = f"{Path(self._datestring)}\\{time_m_s}\\{self._filename}"
+            save_dir = self._disk / self._datestring / time_m_s
         else:
-            Path(f"{self._datestring}\\{self._foldername}").mkdir(parents=True, exist_ok=True)
-            self._tif_path = f"{Path(self._datestring)}\\{self._foldername}\\{self._filename}"
+            save_dir = self._disk / self._datestring / self._foldername
+
+        save_dir.mkdir(parents=True, exist_ok=True)
+        self._tif_path = save_dir / self._filename  
+
         for chan in self._channels:
-            setattr(self,f"_tif{chan}",tiff.TiffWriter(f"{self._tif_path}{self._stack:05d}{chan}.tif",bigtiff=True))
-        
+            setattr(self, f"_tif{chan}", tiff.TiffWriter(
+                str(self._tif_path) + f"{self._stack:05d}{chan}.tif", bigtiff=True
+            ))
         self._queue = Queue(maxsize = 2000)
         self._stop_thread = threading.Event()
         self._save_thread = threading.Thread(target= self._saving_thread, daemon=True)
@@ -386,7 +409,7 @@ class Acquisition:
         self.stages_movement.enable_all()
         self._start_pos = self.stages_movement.get_pos()
         mmc.startSequenceAcquisition(
-            self._frames,
+            self._stack_height,
             0,
             True
         )
@@ -401,18 +424,28 @@ class Acquisition:
             self.DAQ_VC.stop()
         
         if self._save:    
-                self._queue.join()
-                self._stop_thread.set()
-                self._save_thread.join()
-                self._file_save.close()
-                self._file_acquire.close()
-                for chan in self._channels:
-                    print("closing")
-                    tif = getattr(self, f"_tif{chan}")
-                    try:
-                        tif.close()
-                    except Exception as e:
-                        print(f"couldn't close {chan}: {e}")    
+            timeout = 60
+            t_start = time.perf_counter()
+            while not self._queue.empty():
+                if time.perf_counter() - t_start > timeout:
+                    print("WARNING: queue drain timed out!")
+                    break
+                time.sleep(0.05)
+
+            self._stop_thread.set()
+            self._save_thread.join(timeout=10)
+            if self._save_thread.is_alive():
+                print("WARNING: save thread did not stop cleanly!")
+
+            self._file_save.close()
+            self._file_acquire.close()
+            for chan in self._channels:
+                print("closing")
+                tif = getattr(self, f"_tif{chan}")
+                try:
+                    tif.close()
+                except Exception as e:
+                    print(f"couldn't close {chan}: {e}")    
         
     def _jog(self,
             distance: float,

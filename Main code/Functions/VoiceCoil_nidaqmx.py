@@ -309,6 +309,7 @@ class VoiceCoil_nidaqmx:
         if len(channels) >= 2:
             self._do_waveform = np.identity(len(channels), dtype = np.bool_)
             self._do_lines = ''
+            address ="/Dev1/PFI0"
             for _n ,chan in enumerate(channels):
                 if _n == 0:
                     self._do_lines += f"{self._dev_name}{getattr(self,f"_address_do_{chan}")}"
@@ -317,9 +318,14 @@ class VoiceCoil_nidaqmx:
             self._task_do = nidaqmx.Task()
             self._task_do.do_channels.add_do_chan(self._do_lines,line_grouping=nidaqmx.constants.LineGrouping.CHAN_PER_LINE)
             self._task_do.timing.cfg_samp_clk_timing(1000,
-                                    source = '/Dev1/Ctr0InternalOutput',
+                                    source = address,
+                                    active_edge= nidaqmx.constants.Edge.FALLING,
                                     sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
             self._task_do.write(self._do_waveform, False)
+            self._task_do.triggers.start_trigger.cfg_dig_edge_start_trig(
+            '/Dev1/Ctr0InternalOutput',                               
+            nidaqmx.constants.Edge.RISING
+            )
         else:
             self._do_waveform = True
             self._do_lines = f"{self._dev_name}{getattr(self,f"_address_do_{chan}")}"

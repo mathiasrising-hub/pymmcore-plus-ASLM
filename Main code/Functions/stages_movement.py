@@ -13,7 +13,7 @@ class stages_movement:
         self._controller = Controller(contype='ethernet',n_axes=3)
         self._controller.connect()
         self._boundary = np.array([[-40, 20], [0.5, 18],[-0.5, 5]])
-        self._home = np.array([-20, 9, 0])
+        self._home = np.array([-20, 6, 0])
 
 
     def connect_controller(self):
