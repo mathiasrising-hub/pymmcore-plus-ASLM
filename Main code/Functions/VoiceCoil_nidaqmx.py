@@ -81,6 +81,7 @@ class VoiceCoil_nidaqmx:
         self._task_do_640 = None
         self._task_do_775 = None
         self._task_do_ = None
+        self._blank = None
 
         # Lastly These are currently unused, but are callouts to if the DAQ is running or if the DAQ has setup the save. 
         # This can be added later to avoid errors.
@@ -223,6 +224,13 @@ class VoiceCoil_nidaqmx:
             except Exception as e:
                 print(f'Could not close co task: {e}')
 
+        if self._blank is not None:
+            try:
+                self._blank.close()
+                self._all_tasks.remove(self._blank)
+            except Exception as e:
+                print(f"Blanking could not e closed: {e}")
+
         if self._task_do is not None:
             try:
                 self._task_do.close()
@@ -264,7 +272,9 @@ class VoiceCoil_nidaqmx:
         self._all_tasks.append(self._task_ao)
         ao_address = self._dev_name + self._address_ao_mirror
         
-       
+        self._blank = nidaqmx.Task()
+        self._all_tasks.append(self._blank)
+        blank_address = self._dev_name + self._address_blanking
 
 
         #First of we define the specifics of the waveforms and frequencies used.
@@ -300,7 +310,7 @@ class VoiceCoil_nidaqmx:
         #Now finally we can write the waveform to the analog pin. The second argument is to inform that it shouldn't start automatically.
         self._task_ao.write(self._ao_waveform, False)
 
-
+        self._blank.do_channels.add_do_chan(blank_address)
 
         #Now we define the digital output task. this is a for loop as its dependent on the individual channels. 
         #Here we also want to define the task done
@@ -319,28 +329,19 @@ class VoiceCoil_nidaqmx:
             self._task_do.do_channels.add_do_chan(self._do_lines,line_grouping=nidaqmx.constants.LineGrouping.CHAN_PER_LINE)
             self._task_do.timing.cfg_samp_clk_timing(1000,
                                     source = address,
-                                    active_edge= nidaqmx.constants.Edge.FALLING,
+                                    active_edge= nidaqmx.constants.Edge.RISING,
                                     sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
             self._task_do.write(self._do_waveform, False)
+            '''
             self._task_do.triggers.start_trigger.cfg_dig_edge_start_trig(
             '/Dev1/Ctr0InternalOutput',                               
             nidaqmx.constants.Edge.RISING
             )
+            '''
         else:
             self._do_waveform = True
             self._do_lines = f"{self._dev_name}{getattr(self,f"_address_do_{chan}")}"
-            
-
-
-
-
-
-
-
         
-
-
-
 
     #This function is pretty simple. We want to make sure we close each task, so they don't cause problems. 
     #This could be optimized using the self._all_tasks, but havent yet.
@@ -358,6 +359,10 @@ class VoiceCoil_nidaqmx:
             self._task_do.close()
         except Exception as e:
             print(f'Could not close do task: {e}')
+        try:
+            self._blank.close()
+        except Exception as e:
+            print(f'Could not close blank task: {e}')
         try: 
             for i in range(cameras):
                 task_name = f"_task_di_{i}"
@@ -369,6 +374,7 @@ class VoiceCoil_nidaqmx:
         self._task_co = None
         self._task_do = None
         self._task_ao = None
+        self._blank = None
     
 
     # This is used to start all tasks in the DAQ.
@@ -390,9 +396,21 @@ class VoiceCoil_nidaqmx:
             self._task_co.start()
         except Exception as e:
             print(f'Could not start tasks: {e}')
-
+        try:
+            self._blank.write(True,auto_start = True)
+        except Exception as e:
+            print(f"Could not start blanking: {e}")
 
     # this is used to stop all tasks in the DAQ. NB: Stop is not the same as close. Stop just stops the task for now, while close removes the task.
+    def pause(self):
+        self._task_co.stop()
+        self._blank.write(False,auto_start = True)
+
+    def pause_start(self):
+        self._blank.write(True, auto_start = True)
+        self._task_co.start()
+
+
     def stop(self,
              cameras: int = 1):
         
@@ -403,23 +421,19 @@ class VoiceCoil_nidaqmx:
 
         try:
             self._task_do.stop()
+            '''
             if self._channels_length >=  2:
                 arr = np.zeros((self._do_waveform.shape[0],1),dtype = np.bool_)
             else:
                 arr = False
-            self._task_do.timing.cfg_samp_clk_timing(100,
-                                    sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
-            self._task_do.write(arr, True)
+            blank = nidaqmx.Task()
+            blank.do_channels.add_do_chan(self._do_lines,
+            line_grouping=nidaqmx.constants.LineGrouping.CHAN_PER_LINE
+            )
+            blank.write(arr,True)
             time.sleep(0.1)
-            if self._channels_length >=  2:
-                self._task_do.stop()
-                self._task_do.timing.cfg_samp_clk_timing(100,
-                                   source = '/Dev1/Ctr0InternalOutput',
-                                    sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS)
-                self._task_do.write(self._do_waveform, False)
-            else:
-                self._task_do.close()
-
+            blank.stop()
+            '''
         except Exception as e:
             print(f'Could not stop do task: {e}')
 
@@ -446,6 +460,10 @@ class VoiceCoil_nidaqmx:
                 task.stop()
         except Exception as e:
             print(f'Could not stop DI task: {e}')
+        try:
+            self._blank.write(False,True)
+        except Exception as e:
+            print(f"Blanking did not stop: {e}")
 
 
 # %%
