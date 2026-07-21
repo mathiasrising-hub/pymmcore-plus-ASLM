@@ -57,7 +57,11 @@ class stages_movement:
     def enable_z(self):
         ax2 = self._controller.axes[2]
         ax2.enable()
-    
+
+    def isenabled(self,ax):
+        axis = self._controller.axes[ax]
+        return axis.enabled
+
     def enable_all(self):
         ax0 = self._controller.axes[0]
         ax1 = self._controller.axes[1]
@@ -119,7 +123,6 @@ class stages_movement:
             self._home
         )
     def jog(self, axis, distance):
-        #t_start = time.perf_counter()
         #First off we check if the axis is valid. Since we have a XYZ stage, it should be an integer between 0-2
         boundary = self._boundary
         if axis not in (0,1,2):
@@ -136,27 +139,13 @@ class stages_movement:
             return
         
         #ax.ptpr is a relative move (jog). We send a signal to move the distance given in the function. 
-        #t_middle_0 = time.perf_counter()
         acsc.toPoint(controller.hc,0,axis,pos+distance)
-        #t_middle_1 = time.perf_counter()
-        '''
-        #Now we want to check if the movement has stopped, and when it has stopped we want to inform the position and exit the function
-        positions = []
-        while True:
-            state = acsc.getMotorState(controller.hc, axis)
-            positions.append((time.perf_counter(), acsc.getRPosition(controller.hc, axis)))
-            if state['in position']:
-                break
-
-        for t, p in positions:
-            print(f"{(t-t_middle_1)*1000:.2f}ms: {p}")
-        #print('Movement has finished. from position,',pos,'to',ax.rpos)
-        '''
+ 
         TARGET = pos + distance
-        TOLERANCE = 0.0000001 
+        TOLERANCE = 0.000001 
 
         while True:
-            current_pos = acsc.getRPosition(controller.hc, 2)
+            current_pos = acsc.getRPosition(controller.hc, axis)
             if abs(current_pos - TARGET) <= TOLERANCE:
                 break
             time.sleep(0.00001)

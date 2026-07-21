@@ -1,0 +1,79 @@
+# environment.yml
+#
+# Recreate this environment with:
+#   conda env create -f environment.yml
+#
+# This is a curated list (not a full `conda list --export` dump) — it only
+# includes packages this project actually imports directly, plus a few
+# load-bearing dependencies worth pinning deliberately. Letting conda/pip
+# resolve the rest keeps the solve flexible and avoids brittle, machine-specific
+# build strings.
+
+name: lightsheet-control
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.14
+
+  # --- Qt / GUI stack ---
+  # PySide6 chosen over PyQt6 for LGPL licensing. Pinned because this exact
+  # combination (pyside6 + pymmcore-plus + pymmcore-widgets + qtconsole) has
+  # been confirmed to work together — an unplanned upgrade risks breaking
+  # that combination again (see qtconsole note below).
+  - pyside6=6.11.1
+  - qtpy=2.4.3
+
+  # --- Micro-Manager / camera control (PVCAM camera only) ---
+  # Pin these two specifically — pymmcore-widgets in particular is young
+  # and has changed its internal API between minor versions.
+  - pymmcore-plus=0.18.1
+  - pymmcore-widgets=0.12.1
+  # pymmcore-plus's compiled core bindings; pulled in automatically by
+  # pymmcore-plus, but listed explicitly since it's the piece most likely
+  # to cause a silent crash (native code, not a Python exception) if
+  # mismatched against your installed Micro-Manager device adapters.
+  - pymmcore=12.5.0.75.0
+
+  # --- Everything else this project touches directly ---
+  - numpy
+  - tifffile
+  - shapely       # transitive dependency of useq-schema; conda-forge build needs geos, pulled in automatically
+
+  - pip
+  - pip:
+      # IMPORTANT: qtconsole must come from pip, not conda-forge.
+      # The conda-forge build of qtconsole hard-pins PyQt5 as a dependency,
+      # which silently reintroduces a second, conflicting Qt5 installation
+      # alongside PySide6 (Qt6) — this caused a genuinely nasty silent
+      # native crash on window creation. The pip build resolves its Qt
+      # dependency through qtpy instead, and correctly picks up the
+      # PySide6 already installed above.
+      - qtconsole==5.7.2
+
+      # DAQ control
+      - nidaqmx
+
+      # Stage control — ACS Motion Control's Python SDK
+      - acspy==0.0.9
+
+# --- Setup notes ---
+# 1. conda env create -f environment.yml
+# 2. conda activate lightsheet-control
+# 3. Verify the Micro-Manager device adapters are installed and match the
+#    DIV (device interface version) pymmcore expects:
+#      mmcore list
+#    If missing/mismatched:
+#      mmcore install
+# 4. Verify the core imports work:
+#      python -c "import pymmcore_plus; print(pymmcore_plus.__version__)"
+#      python -c "import pymmcore_widgets; print('widgets ok')"
+#      python -c "import qtconsole; print('qtconsole ok')"
+#      python -c "import acspy; print('acspy ok')"
+#      python -c "import nidaqmx; print('nidaqmx ok')"
+#
+# If you ever need to add a package and conda's solver wants to pull in
+# pyqt/pyqt5-sip/qt-main (Qt5) alongside pyside6/qt6-main — stop and
+# investigate before proceeding. That combination is what caused the
+# original crash; see project notes / chat history for the full story.

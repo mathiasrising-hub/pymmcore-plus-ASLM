@@ -40,7 +40,7 @@ class Acquisition:
     And lastly the system is running on a seperate thread to ensure that the acquisition is not slowed down if saving has issues, or large files. 
     This is furthermore improved by using a pause when the stages move tiles. This ensures that the saving does not lag too far behind.
 
-    This descriptive text is last editet 09-08-2026 by Mathias Rising
+    This descriptive text is last editet 07-08-2026 by Mathias Rising
     Main Author: Mathias Rising
     Created for the Bewersdorf lab and the pan-ASLM microscope.
     '''
@@ -51,24 +51,32 @@ class Acquisition:
         config_path: str = r"\Users\Hannah\Desktop\configuration\PVCAM_only.cfg" #The configuration path. For now it's hard coded, though this can be changed to be a parameter in the future.
     ):
         
-        # Set the first instance of this class as the global singleton
-        global mmc #This is made a global variable purely for debugging purposes. It can be used to check the status of the micro manager core
+        # Current fix to small bug, can be changed later
+        print('global')
+        global mmc
         if mmc is not None:
+            print('mmc is not None')
             mmc.unloadAllDevices() #We want to make sure, if there is a previous instance of the core, that it is unloaded before we start a new one. This is to avoid issues with lingering devices.
         if mmc is None:
+            print('mmc is None')
             mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
-        
+        print('mmc is being defiend as MDA mmc')
+        self.mmc = mmc
         #This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
+        print('mmc is enabling debulog')
         mmc.enableDebugLog(True)
 
         # Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
+        print('loading system config')
         mmc.loadSystemConfiguration(config_path)
-        
+
         #The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
+        print('mmc autoshutter is turned off')
         mmc.setAutoShutter(False)
 
 
         #Now we name the other classes to be used in the class. They are of course also set to instance variables to ensure use in the entire class
+        print('mmc setup is done.')
         self.stages_movement = stages_movement
         self.DAQ_VC = DAQ
         
