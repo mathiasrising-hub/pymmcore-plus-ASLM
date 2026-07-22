@@ -52,7 +52,7 @@ class Acquisition:
     ):
         
         # Current fix to small bug, can be changed later
-        print('global')
+        #print('global')
         global mmc
         if mmc is not None:
             print('mmc is not None')
@@ -60,23 +60,23 @@ class Acquisition:
         if mmc is None:
             print('mmc is None')
             mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
-        print('mmc is being defiend as MDA mmc')
+        #print('mmc is being defiend as MDA mmc')
         self.mmc = mmc
         #This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
-        print('mmc is enabling debulog')
+        #print('mmc is enabling debulog')
         mmc.enableDebugLog(True)
 
         # Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
-        print('loading system config')
+        #print('loading system config')
         mmc.loadSystemConfiguration(config_path)
 
         #The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
-        print('mmc autoshutter is turned off')
+        #print('mmc autoshutter is turned off')
         mmc.setAutoShutter(False)
 
 
         #Now we name the other classes to be used in the class. They are of course also set to instance variables to ensure use in the entire class
-        print('mmc setup is done.')
+        #print('mmc setup is done.')
         self.stages_movement = stages_movement
         self.DAQ_VC = DAQ
         
@@ -922,6 +922,8 @@ class Acquisition:
     
         
     def close(self):
+        if mmc.isSequenceRunning():
+            mmc.stopSequenceAcquisition()
         mmc.unloadAllDevices()
         try:
             self.DAQ_VC.close()

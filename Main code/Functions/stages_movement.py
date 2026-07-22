@@ -116,7 +116,48 @@ class stages_movement:
         ax2_home = 0
         self._home = np.array([ax0_home, ax1_home, ax2_home])
         self._boundary = np.array([ax0_bounds, ax1_bounds_sorted, ax2_bounds])
+    
+    def begin_set_home(self):
+        ax0 = self._controller.axes[0]
+        ax1 = self._controller.axes[1]
+        ax2 = self._controller.axes[2]
 
+        self._ax0_bounds = [-40, 2]
+        self._ax2_bounds = [-0.5, 5]
+        self._ax1_samples = []
+
+        self._boundary = None
+        self._home = None
+
+        if ax1.enabled:
+            ax1.disable()
+        if ax0.enabled:
+            ax0.disable()
+        if not ax2.enabled:
+            ax2.enable()
+
+    def capture_set_home_edge(self):
+        ax1 = self._controller.axes[1]
+        self._ax1_samples.append(ax1.rpos)
+        return float(ax1.rpos)
+
+    def finish_set_home(self):
+        ax0 = self._controller.axes[0]
+        ax2 = self._controller.axes[2]
+
+        self.enable_all()
+
+        ax1_bounds_sorted = np.sort(np.array(self._ax1_samples, dtype=float))
+        if ax1_bounds_sorted.size != 2:
+            raise RuntimeError("Need exactly two edge captures to finish set_home.")
+
+        ax0_home = float(ax0.rpos)
+        ax1_home = float((ax1_bounds_sorted[1] + ax1_bounds_sorted[0]) / 2)
+        ax2_home = 0.0
+
+        self._home = np.array([ax0_home, ax1_home, ax2_home], dtype=float)
+        self._boundary = np.array([self._ax0_bounds, ax1_bounds_sorted, self._ax2_bounds], dtype=float)
+        return self._home, self._boundary
     def move_home(self):
     
         self.move_to(

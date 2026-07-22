@@ -27,7 +27,9 @@ def run(
     window = MainWindow(mmc, DAQ, stage, MDA)
     window.show() 
     print("about to start event loop")
-    sys.exit(app.exec())                  
+    result = app.exec()
+    print("app.exec() returned:", result)
+    sys.exit(result)                  
 
 if __name__ == '__main__':
     run()

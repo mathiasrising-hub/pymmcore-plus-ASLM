@@ -1,4 +1,5 @@
 from qtpy.QtWidgets import QWidget, QPushButton, QGridLayout, QDoubleSpinBox, QLabel
+from .CalibrateHomeDialog import CalibrateHomeDialog
 class JogPanel(QWidget):
     def __init__(self, stage_movement):
         super().__init__()
@@ -64,6 +65,15 @@ class JogPanel(QWidget):
         self._set_buttons_enabled((self.left_btn, self.right_btn), self.y_toggle.isChecked())
         self._set_buttons_enabled((self.up_z_btn, self.down_z_btn), self.z_toggle.isChecked())
 
+        self.move_home = self._make_moveto_button('Move Home')
+        self.move_home.clicked.connect(lambda: self._move_home())
+
+        self.set_home = self._make_moveto_button('Calibrate Home')
+        self.set_home.clicked.connect(lambda: self._calibrate_home())
+        
+        layout.addWidget(self.move_home, 5, 0)
+        layout.addWidget(self.set_home, 5, 1)
+        
 
 
     def _make_jog_button(self, text):
@@ -72,6 +82,39 @@ class JogPanel(QWidget):
         btn.setStyleSheet("font-size: 14pt; font-weight: bold;")
         return btn
 
+    def _make_moveto_button(self, text):
+        btn = QPushButton(text)
+        return btn
+    
+    def _refresh_motor_toggles_from_hardware(self):
+        X_axis, Y_axis, Z_axis = 0, 1, 2
+
+        x = self.stage_movement.isenabled(X_axis)
+        y = self.stage_movement.isenabled(Y_axis)
+        z = self.stage_movement.isenabled(Z_axis)
+
+        # block signals to avoid calling enable/disable again
+        for btn, state in [(self.x_toggle, x), (self.y_toggle, y), (self.z_toggle, z)]:
+            btn.blockSignals(True)
+            btn.setChecked(state)
+            btn.blockSignals(False)
+
+        self.x_toggle.setText("X Motor: ON" if x else "X Motor: OFF")
+        self.y_toggle.setText("Y Motor: ON" if y else "Y Motor: OFF")
+        self.z_toggle.setText("Z Motor: ON" if z else "Z Motor: OFF")
+
+        self._set_buttons_enabled((self.up_btn, self.down_btn), x)
+        self._set_buttons_enabled((self.left_btn, self.right_btn), y)
+        self._set_buttons_enabled((self.up_z_btn, self.down_z_btn), z)
+
+    def _move_home(self):
+        self.stage_movement.move_home()
+        self._refresh_motor_toggles_from_hardware()
+        
+    def _calibrate_home(self):
+        dlg = CalibrateHomeDialog(self.stage_movement, parent=self)
+        if dlg.exec():  # modal; blocks other interaction but keeps UI responsive
+            self._refresh_motor_toggles_from_hardware()
     def _set_buttons_enabled(self, buttons, enabled):
         for btn in buttons:
             btn.setEnabled(enabled)
