@@ -1,9 +1,11 @@
-from qtpy.QtCore import Signal, Qt
+from qtpy.QtCore import Signal, Qt, QTimer
 from qtpy.QtWidgets import (
     QWidget, QGroupBox, QGridLayout, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox, QCheckBox,
     QProgressBar, QFileDialog
 )
+from pathlib import Path
+from .acq_config import AcqConfig
 
 class AcquisitionPanel(QWidget):
     # MainWindow can connect to these to disable ImagePreview, etc.
@@ -16,12 +18,18 @@ class AcquisitionPanel(QWidget):
           - setup_sequence(config)
           - run_sequence(config)   (should return quickly / start threads)
           - request_stop() or stop_sequence()
-        For now, it can be a placeholder object; we’ll wire calls later.
+        For now, it can be a placeholder object; well wire calls later.
         """
         super().__init__(parent)
         self.acq = acquisition_controller
         self._running = False
+        self._total_frames = 0
 
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(200)
+        self._progress_timer.timeout.connect(self._poll_progress)
+
+        
         # ---- Left: Parameters ----
         params_box = QGroupBox("Acquisition Parameters")
         params_layout = QFormLayout(params_box)
@@ -32,9 +40,17 @@ class AcquisitionPanel(QWidget):
         self.exposure_ms.setDecimals(3)
         self.exposure_ms.setValue(10.0)
 
-        self.n_frames = QSpinBox()
-        self.n_frames.setRange(1, 10_000_000)
-        self.n_frames.setValue(1000)
+        self.z_depth = QDoubleSpinBox()
+        self.z_depth.setRange(0.01, 10000.0)
+        self.z_depth.setDecimals(3)
+        self.z_depth.setValue(0.1)
+
+        
+        self.z_stepsize = QDoubleSpinBox()
+        self.z_stepsize.setRange(0.00001, 10000.0)
+        self.z_stepsize.setDecimals(6)
+        self.z_stepsize.setValue(0.0002)
+
 
         self.save_path = QLineEdit()
         browse_btn = QPushButton("Browse…")
@@ -45,16 +61,17 @@ class AcquisitionPanel(QWidget):
         save_row.addWidget(browse_btn, 0)
 
         self.ch_488 = QCheckBox("488")
-        self.ch_561 = QCheckBox("561")
+        self.ch_560 = QCheckBox("560")
         self.ch_488.setChecked(True)
 
         ch_row = QHBoxLayout()
         ch_row.addWidget(self.ch_488)
-        ch_row.addWidget(self.ch_561)
+        ch_row.addWidget(self.ch_560)
         ch_row.addStretch(1)
 
         params_layout.addRow("Exposure (ms)", self.exposure_ms)
-        params_layout.addRow("Frames", self.n_frames)
+        params_layout.addRow("Z_stepsize", self.z_stepsize)
+        params_layout.addRow('Z_depth', self.z_depth)
         params_layout.addRow("Save to", save_row)
         params_layout.addRow("Channels", ch_row)
 
@@ -64,6 +81,10 @@ class AcquisitionPanel(QWidget):
 
         self.status_label = QLabel("Idle")
         self.status_label.setWordWrap(True)
+
+        # connect bridge -> panel UI state
+        self.acq.running_changed.connect(self._on_running_changed)
+        self.acq.status_message.connect(self.status_label.setText)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -118,27 +139,32 @@ class AcquisitionPanel(QWidget):
         if folder:
             self.save_path.setText(folder)
 
-    def _collect_config(self) -> dict:
-        # placeholder config container; you can switch to a dataclass later
-        return {
-            "exposure_ms": float(self.exposure_ms.value()),
-            "n_frames": int(self.n_frames.value()),
-            "save_path": self.save_path.text().strip(),
-            "channels": {
-                "488": self.ch_488.isChecked(),
-                "561": self.ch_561.isChecked(),
-            },
-        }
 
+    def _collect_config(self) -> AcqConfig:
+        channels = []
+        if self.ch_488.isChecked(): channels.append("488")
+        if self.ch_560.isChecked(): channels.append("560")
+        cfg = AcqConfig(
+            exposure_ms=float(self.exposure_ms.value()),
+            z_depth=float(self.z_depth.value()),
+            z_stepsize=float(self.z_stepsize.value()),
+            channels=channels,
+            save_path=Path(self.save_path.text().strip()) if self.save_path.text().strip() else None,
+            # saving stays false unless you add a checkbox later
+            saving=True,
+            filename="Zstack",
+            foldername="Default",
+        )
+        cfg.validate()
+        return cfg
     def _set_ui_running(self, running: bool):
         self._running = running
 
         # parameters locked while running
         self.exposure_ms.setEnabled(not running)
-        self.n_frames.setEnabled(not running)
         self.save_path.setEnabled(not running)
         self.ch_488.setEnabled(not running)
-        self.ch_561.setEnabled(not running)
+        self.ch_560.setEnabled(not running)
 
         self.setup_btn.setEnabled(not running)
         self.start_btn.setEnabled(not running)
@@ -148,45 +174,66 @@ class AcquisitionPanel(QWidget):
     # Button callbacks
     # ----------------------------
     def _on_setup(self):
-        cfg = self._collect_config()
+        try:
+            cfg = self._collect_config()
+        except Exception as e:
+            self.status_label.setText(f"Config error: {e}")
+            return
+
         self.status_label.setText("Setup…")
         self.status_message.emit("Setup requested")
+        self.acq.setup(cfg)
 
-        # call into your acquisition controller (wire later)
-        if hasattr(self.acq, "setup_sequence"):
-            self.acq.setup_sequence(cfg)
-
-        self.status_label.setText("Setup complete")
 
     def _on_start(self):
-        cfg = self._collect_config()
+        try:
+            cfg = self._collect_config()
+        except Exception as e:
+            self.status_label.setText(f"Config error: {e}")
+            return
 
+        engine = getattr(self.acq, "engine", None)
+        total = int(getattr(engine, "_frames", 0)) if engine is not None else 0
         self.status_label.setText("Running…")
         self.progress.setValue(0)
-        self.frame_counter.setText(f"Frame: 0 / {cfg['n_frames']}")
+        self.frame_counter.setText(f"Frame: 0 / {total if total else '?'}")
 
-        self._set_ui_running(True)
-        self.acquisition_running_changed.emit(True)   # MainWindow disables ImagePreview
-
-        # start acquisition (wire later)
-        if hasattr(self.acq, "run_sequence"):
-            self.acq.run_sequence(cfg)
-
+        self.acq.start()
     def _on_stop(self):
         self.status_label.setText("Stopping…")
         self.status_message.emit("Stop requested")
-
-        # request stop (wire later; your code uses an event thread)
-        if hasattr(self.acq, "request_stop"):
-            self.acq.request_stop()
-        elif hasattr(self.acq, "stop_sequence"):
-            self.acq.stop_sequence()
-
-        # For now we mark idle immediately. Later you can flip to idle only
-        # after you get an "acquisition finished" signal from the worker.
-        self._finish_run_ui()
+        self.stop_btn.setEnabled(False)  # avoid repeated clicks
+        self.acq.stop()
+        # do NOT finish UI here; wait for running_changed(False)
 
     def _finish_run_ui(self):
         self._set_ui_running(False)
         self.acquisition_running_changed.emit(False)
         self.status_label.setText("Idle")
+    
+    def _on_running_changed(self, running: bool):
+        if running:
+            self._set_ui_running(True)
+            self.acquisition_running_changed.emit(True)
+            self._progress_timer.start()
+        else:
+            self._progress_timer.stop()
+            self._finish_run_ui()
+
+
+    def _poll_progress(self):
+        engine = getattr(self.acq, "engine", None)  # if bridge stores it as .engine
+        if engine is None:
+            engine = getattr(self.acq, "acq", None) # if you named it .acq
+        if engine is None:
+            return
+
+        cur = int(getattr(engine, "_count", 0))
+        total = int(getattr(engine, "_frames", 0))
+        if total > 0:
+            pct = min(100, int(cur * 100 / total))
+            self.progress.setValue(pct)
+            self.frame_counter.setText(f"Frame: {cur} / {total}")
+        else:
+            # unknown total
+            self.frame_counter.setText(f"Frame: {cur}")

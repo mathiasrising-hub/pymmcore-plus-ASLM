@@ -16,7 +16,6 @@ import threading
 from queue import Queue
 import queue
 import time
-mmc = None
 
 
 # In[2]:
@@ -51,28 +50,21 @@ class Acquisition:
         config_path: str = r"\Users\Hannah\Desktop\configuration\PVCAM_only.cfg" #The configuration path. For now it's hard coded, though this can be changed to be a parameter in the future.
     ):
         
-        # Current fix to small bug, can be changed later
-        #print('global')
-        global mmc
-        if mmc is not None:
-            print('mmc is not None')
-            mmc.unloadAllDevices() #We want to make sure, if there is a previous instance of the core, that it is unloaded before we start a new one. This is to avoid issues with lingering devices.
-        if mmc is None:
-            print('mmc is None')
-            mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
+
+        self.mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
         #print('mmc is being defiend as MDA mmc')
-        self.mmc = mmc
+        
         #This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
         #print('mmc is enabling debulog')
-        mmc.enableDebugLog(True)
+        self.mmc.enableDebugLog(True)
 
         # Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
         #print('loading system config')
-        mmc.loadSystemConfiguration(config_path)
+        self.mmc.loadSystemConfiguration(config_path)
 
         #The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
         #print('mmc autoshutter is turned off')
-        mmc.setAutoShutter(False)
+        self.mmc.setAutoShutter(False)
 
 
         #Now we name the other classes to be used in the class. They are of course also set to instance variables to ensure use in the entire class
@@ -112,6 +104,9 @@ class Acquisition:
 
         
         # Instance variables defined. Should not be changed by the user. These are mostly used for counting purposes.
+        self._running = False
+        self._finished_event = threading.Event()
+        self._finished_event.set()   # idle initially
         self._stack_height = 1 # Stack height is the number of total slices in a Z stack
         self._frames = 1 # Total number of frames to be acquired. This is calculated from the other parameters.
         self._idx_frame = 0 # Current frame index. This is used to keep track
@@ -339,6 +334,8 @@ class Acquisition:
             if not trigger:
                 continue
             self._pause_event.clear()
+            if self._pause_status:
+                continue
             self._pause()
 
 
@@ -354,7 +351,7 @@ class Acquisition:
         # There also is a pause to catch up to saving, if the saving is lagging behind. This is a failsafe to ensure that the acquisition does not stop due to saving issues.
         expected_frames = self._count
         if not self._silence:
-            print(f"status: Images in the buffer: {mmc.getRemainingImageCount()}. Images acquired: {self._idx_frame}. Images in queue: {self._queue.qsize()}. Images saved: {self._idx_slice + (self._stack*self._stack_height)}")
+            print(f"status: Images in the buffer: {self.mmc.getRemainingImageCount()}. Images acquired: {self._idx_frame}. Images in queue: {self._queue.qsize()}. Images saved: {self._idx_slice + (self._stack*self._stack_height)}")
             print(f"Pausing DAQ at {time.perf_counter()-self._tstart}")
         self.DAQ_VC.pause()
 
@@ -367,14 +364,14 @@ class Acquisition:
         # This is to ensure that no images are taken and the callback function isn't called while stages are moving.
         
         t_pause_start_1 = time.perf_counter()
-        while mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
+        while self.mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
             self._acquire_event.set()    
             if time.perf_counter() - t_pause_start_1 > 2:
                 print('Timeout waiting for the circular buffer!')
                 self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
                 break
             time.sleep(0.05)
-        while mmc.getRemainingImageCount() > 0:
+        while self.mmc.getRemainingImageCount() > 0:
             self._acquire_event.set()
             if time.perf_counter() - t_pause_start_1 > 10:
                 print('Timeout waiting for the acquiring!')
@@ -396,7 +393,7 @@ class Acquisition:
 
         if not self._silence:
             print(f"Pausing Acquisition at {time.perf_counter() - self._tstart}")
-        mmc.stopSequenceAcquisition()
+        self.mmc.stopSequenceAcquisition()
         # We now check if we are at the last tile in the X direction. 
         # If we are not, we move to the next tile in the X direction. 
         # If we are, we move to the next tile in the Y direction and change the direction of movement in the X direction.
@@ -434,7 +431,7 @@ class Acquisition:
         if not self._silence:
             print(f"starting again at {time.perf_counter() - self._tstart}")
         self._pause_status = False
-        mmc.startContinuousSequenceAcquisition()
+        self.mmc.startContinuousSequenceAcquisition()
         self.DAQ_VC.pause_start()
 
         
@@ -474,7 +471,9 @@ class Acquisition:
         There is a if statement that checks for every 100 images it does a flush, which means it writes into the log from the buffer to make sure it never clutters up.
         Lastly there are some exceptions, mostly for if error happens, or if there is no image in the queue.
         '''
-        while not self._stop_thread.is_set() == True:
+        while True:
+            if self._stop_thread.is_set() and self._queue.empty():
+                break
             try:
                 t1 = time.perf_counter()
                 image = self._queue.get(timeout = 2)
@@ -535,14 +534,14 @@ class Acquisition:
             self._acquire_event.clear()
 
             # drain buffer
-            while mmc.getRemainingImageCount() > 0:
+            while self.mmc.getRemainingImageCount() > 0:
                 tt = time.perf_counter()
                 self._idx_frame += 1
-                image = mmc.popNextImage()
+                image = self.mmc.popNextImage()
                 if self._idx_frame % 100 == 0:
                     self._file_acquire.write(
-                        f"Buffer free: {mmc.getBufferFreeCapacity()} / "
-                        f"{mmc.getBufferTotalCapacity()}\n"
+                        f"Buffer free: {self.mmc.getBufferFreeCapacity()} / "
+                        f"{self.mmc.getBufferTotalCapacity()}\n"
                     )
                     self._file_acquire.flush()
                 if self._save:
@@ -565,10 +564,10 @@ class Acquisition:
             return
         self._count += 1
         ttt = time.perf_counter()
-        if self._count >= self._frames or mmc.isSequenceRunning() == False:
+        if self._count >= self._frames or self.mmc.isSequenceRunning() == False:
             if not self._silence:
                 print('Stopping Acquisition')
-            self._file_acquire.write(f"Time: {ttt-self._tstart}. Status of stopping Acquisition: Sequence running? {mmc.isSequenceRunning()}. Frames taken vs total frames: {self._count} vs {self._frames}. Total frames acquired: {self._idx_frame}.\n")
+            self._file_acquire.write(f"Time: {ttt-self._tstart}. Status of stopping Acquisition: Sequence running? {self.mmc.isSequenceRunning()}. Frames taken vs total frames: {self._count} vs {self._frames}. Total frames acquired: {self._idx_frame}.\n")
             self._stop_sequence_event.set()
             return
         self._acquire_event.set()
@@ -609,8 +608,7 @@ class Acquisition:
             setattr(self, f"_tif{chan}", tiff.TiffWriter(
                 str(self._tif_path) + f"{self._stack:05d}{chan}.tif", bigtiff=True
             ))
-        self._queue = Queue(maxsize = 2000)
-        self._save_thread = threading.Thread(target= self._saving_thread, daemon=True)
+
         
 
     def _save_path(
@@ -657,12 +655,12 @@ class Acquisition:
         If this is not the case in the future (as only 1 camera is in use now), then the code needs to be changed
         '''
         for i in range(self._cameras):
-            mmc.setProperty(f"Camera-{i+1}",'Exposure',self._exposure),
-            mmc.setProperty(f"Camera-{i+1}",'TriggerMode',self._trigger)
-            mmc.setProperty(f"Camera-{i+1}",'ScanDirection',self._scan_direction)
-            mmc.setProperty(f"Camera-{i+1}",'ScanMode','Scan Width'),
-            mmc.setProperty(f"Camera-{i+1}",'ScanWidth',self._scan_width)
-            mmc.setProperty(f"Camera-{i+1}",'Port',self._Port)
+            self.mmc.setProperty(f"Camera-{i+1}",'Exposure',self._exposure),
+            self.mmc.setProperty(f"Camera-{i+1}",'TriggerMode',self._trigger)
+            self.mmc.setProperty(f"Camera-{i+1}",'ScanDirection',self._scan_direction)
+            self.mmc.setProperty(f"Camera-{i+1}",'ScanMode','Scan Width'),
+            self.mmc.setProperty(f"Camera-{i+1}",'ScanWidth',self._scan_width)
+            self.mmc.setProperty(f"Camera-{i+1}",'Port',self._Port)
             
     def _calculate_frames(self):
         '''
@@ -694,6 +692,8 @@ class Acquisition:
         silence: bool = None,
         filename: str = None,
         foldername: str = None,
+        exposure: float = None,
+        trigger_mode: str = None,
         lag_limit: int = None
     ):
         '''
@@ -721,25 +721,16 @@ class Acquisition:
             self._filename = filename
         if foldername is not None:
             self._foldername = foldername
+        if exposure is not None:
+            self._exposure = exposure
+        if trigger_mode is not None:
+            self._trigger = trigger_mode
 
         try:
             self._tile_move = 0.64*(100-overlap)/100
             
             self._stack_height = round(z_depth / (self._z_stepsize)) * len(self._channels)
             
-            self._jog_event = threading.Event()
-            self._jog_thread = threading.Thread(target= self._jog_threading, daemon=True)
-
-            self._acquire_event = threading.Event()
-            self._acquire_thread = threading.Thread(target = self._acquire, daemon = True)
-
-            self._stop_sequence_event = threading.Event()
-            self._stop_sequence_thread = threading.Thread(target = self._stop_threading, daemon = True)
-            
-            self._pause_thread = threading.Thread(target = self._pause_threading, daemon = True)
-            self._pause_event = threading.Event()
-
-            self._stop_thread = threading.Event()
             if lag_limit is None:
                 self._lag_limit = self._stack_height
             else:
@@ -757,7 +748,25 @@ class Acquisition:
         except Exception as e:
             print(f"Something failed in the setup {e}")
 
+
+    def _create_threads(self):
+        self._jog_event = threading.Event()
+        self._jog_thread = threading.Thread(target= self._jog_threading, daemon=True)
+
+        self._acquire_event = threading.Event()
+        self._acquire_thread = threading.Thread(target = self._acquire, daemon = True)
+
+        self._stop_sequence_event = threading.Event()
+        self._stop_sequence_thread = threading.Thread(target = self._stop_threading, daemon = True)
         
+        self._pause_thread = threading.Thread(target = self._pause_threading, daemon = True)
+        self._pause_event = threading.Event()
+        
+        self._stop_thread = threading.Event()
+
+        self._save_thread = None
+        if self._save:
+            self._save_thread = threading.Thread(target= self._saving_thread, daemon=True)
     def run_sequence(
             self,
             X: int = None,
@@ -771,11 +780,18 @@ class Acquisition:
         if self._setup == False:
             print('Setup is not done! run MDA.setup_sequence before running it!')
             return
+        if self._running:
+            print('Acqusition is underway. Stop that one before creating a new one!')
+            return
+        self._running = True
+        self._pause_status = False
+        self._finished_event.clear()    
+        self._queue = Queue()
+        self._create_threads()
         if X is None:
             self._current_X = 1
         else:
             self._current_X = X
-
         if Y is None:
             self._current_Y = 1
         else:
@@ -803,6 +819,7 @@ class Acquisition:
             self._save_thread.start()
             self._tstart = time.perf_counter()
             self._file_save.write(f"stack height: {self._stack_height} \n")
+
         self._file_acquire = open(f"{self._tif_path}_log_acquire.txt",'w')
         self._acquire_thread.start()
         self._jog_thread.start()
@@ -811,7 +828,7 @@ class Acquisition:
         
         self.stages_movement.enable_all()
         self._start_pos = self.stages_movement.get_pos()
-        mmc.startContinuousSequenceAcquisition()
+        self.mmc.startContinuousSequenceAcquisition()
         
         
         if self._trigger == 'Edge Trigger':
@@ -823,78 +840,84 @@ class Acquisition:
 
 
     def stop_sequence(self):
-        if self._trigger == 'Edge Trigger':
-            self.DAQ_VC.stop()
-        if self._save:    
-            timeout = 60
+        try:
+            if self._trigger == 'Edge Trigger':
+                self.DAQ_VC.stop()
             self._pause_status = True
-            t_start = time.perf_counter()
             expected_frames = self._count
             t_pause_start_1 = time.perf_counter()
-            while mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
+            while self.mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
                 self._acquire_event.set()    
                 if time.perf_counter() - t_pause_start_1 > 2:
                     print('Timeout waiting for the circular buffer!')
-                    self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
+                    self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the stop function.\n")
                     break
                 time.sleep(0.05)
-            while mmc.getRemainingImageCount() > 0:
+            while self.mmc.getRemainingImageCount() > 0:
                 self._acquire_event.set()
                 if time.perf_counter() - t_pause_start_1 > 10:
                     print('Timeout waiting for the acquiring!')
-                    self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
+                    self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the stop function.\n")
                     break
                 time.sleep(0.05)
-            mmc.stopSequenceAcquisition()
-            self._acquire_event.clear()
-            while not self._queue.empty():
-                if time.perf_counter() - t_start > timeout:
-                    print("WARNING: queue drain timed out!")
-                    break
-                time.sleep(0.05)
-            self._stop_thread.set()
-            self._acquire_event.set()
-            self._acquire_thread.join(timeout = 10)
-            self._jog_event.set()
-            self._jog_thread.join(timeout = 10)
-            self._save_thread.join(timeout=10)
-            if self._save_thread.is_alive():
-                print("WARNING: save thread did not stop cleanly!")
-            self._file_save.flush()
-            self._file_save.close()
-            self._pause_status = False
-            
-            for chan in self._channels:
-                print("closing")
-                tif = getattr(self, f"_tif{chan}")
-                try:
-                    tif.close()
-                except Exception as e:
-                    print(f"couldn't close {chan}: {e}")  
 
-        if mmc.isSequenceRunning():
-            mmc.stopSequenceAcquisition()
-        self._acquire_thread.join(timeout = 10)  
-        if self._acquire_thread.is_alive():
-            print("WARNING: Acquire thread did not stop cleanly!")
-        self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. Acquisition closed. Frames Acquired vs total frames: {self._idx_frame} vs {self._frames}. Total frames saved: {self._idx_slice+(self._stack_height*self._stack)}.\n")
-        self._file_acquire.flush()
-        self._file_acquire.close()
-        self._jog_thread.join(timeout = 10)  
-        if self._jog_thread.is_alive():
-            print("WARNING: jog thread did not stop cleanly!")
-        
+            if self.mmc.isSequenceRunning():
+                self.mmc.stopSequenceAcquisition()   
+            
+            self._stop_thread.set()
+            
+            self._acquire_event.set()
+            self._acquire_thread.join(timeout = 10)  
+            if self._acquire_thread.is_alive():
+                print("WARNING: Acquire thread did not stop cleanly!")
+            self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. Acquisition closed. Frames Acquired vs total frames: {self._idx_frame} vs {self._frames}. Total frames saved: {self._idx_slice+(self._stack_height*self._stack)}.\n")
+            self._file_acquire.flush()
+            self._file_acquire.close()
+            
+            self._jog_event.set()
+            self._jog_thread.join(timeout = 10)  
+            if self._jog_thread.is_alive():
+                print("WARNING: jog thread did not stop cleanly!")
+
+            self._pause_event.set()
+            self._pause_thread.join(timeout = 10)
+            if self._pause_thread.is_alive():
+                print('WARNING: Pause thread did not stop cleanly!')
+            
+            if self._save:
+                self._save_thread.join(timeout = 20)
+                if self._save_thread.is_alive():
+                    print("WARNING: save thread did not stop cleanly!")
+                else:
+                    self._file_save.flush()
+                    self._file_save.close()
+                    for chan in self._channels:
+                        print("closing")
+                        tif = getattr(self, f"_tif{chan}")
+                        try:
+                            tif.close()
+                        except Exception as e:
+                            print(f"couldn't close {chan}: {e}")  
+            
+        finally:
+            self._running = False
+            self._finished_event.set() 
+
+    def request_stop(self):
+        if self._stop_sequence_event is not None:
+            self._stop_sequence_event.set()
 
     def _jog_threading(self):
         while not self._stop_thread.is_set() == True:
             triggered = self._jog_event.wait(timeout=len(self._channels)+1) 
+            
             if not triggered:
-                if self._pause_status:
-                    continue
                 print('Timeout: no trigger received for jog')
                 continue
-            self._jog_event.clear()
 
+            self._jog_event.clear()
+            if self._pause_status:
+                continue
             self.stages_movement.jog(
             2,
             self._z_stepsize
@@ -922,9 +945,9 @@ class Acquisition:
     
         
     def close(self):
-        if mmc.isSequenceRunning():
-            mmc.stopSequenceAcquisition()
-        mmc.unloadAllDevices()
+        if self.mmc.isSequenceRunning():
+            self.mmc.stopSequenceAcquisition()
+        self.mmc.unloadAllDevices()
         try:
             self.DAQ_VC.close()
         except Exception as e:

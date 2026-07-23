@@ -6,6 +6,7 @@ from GUI_windows.Jog_panel import JogPanel
 from GUI_windows.Acquisition_panel import AcquisitionPanel
 from GUI_windows.debug_console import DebugConsole
 from GUI_windows.Image_panel import ImageFrame
+from GUI_windows.AcquisitionBridge import AcquisitionBridge
 class MainWindow(QMainWindow):
     def __init__(self, core, DAQ, stage, MDA):
         super().__init__()
@@ -17,7 +18,8 @@ class MainWindow(QMainWindow):
 
 
         stage_dock = self._add_dock("Stage Jog", JogPanel(stage), Qt.LeftDockWidgetArea)
-        self.acquisition_panel = AcquisitionPanel(acquisition_controller=self.MDA)
+        self.acq_bridge = AcquisitionBridge(self.MDA)
+        self.acquisition_panel = AcquisitionPanel(acquisition_controller=self.acq_bridge)
         acquisition_dock = self._add_dock("Acquisition", self.acquisition_panel, Qt.RightDockWidgetArea)
 
         self.acquisition_panel.acquisition_running_changed.connect(
