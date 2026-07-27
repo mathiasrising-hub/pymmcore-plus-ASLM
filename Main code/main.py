@@ -33,27 +33,3 @@ def run(
 
 if __name__ == '__main__':
     run()
-
-'''
-# %%
-MDA.save = True
-MDA.exposure = 0.44
-MDA.silence = True
-DAQ.cali_path = "E:\\2026-6-17\\calibration file_5fps_24ms_2"
-
-MDA.setup_sequence(z_depth = 0.1, x_tiles = 2, y_tiles = 2, channels = ['488','560','640'])
-print(MDA._stack_height)
-
-# %%
-MDA.run_sequence()
-
-# %%
-MDA.stop_sequence()
-
-# %%
-stage.move_home()
-
-# %%
-MDA.close()
-
-'''

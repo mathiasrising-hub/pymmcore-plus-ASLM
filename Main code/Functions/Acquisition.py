@@ -23,24 +23,39 @@ import time
 
 class Acquisition:
     '''Class: Acquisition
-    This it the main class used to control the acquisition of images. It calls the 2 other classes, stages_movement and DAQ.
-    The main function of this class is to set up the acquisition parameters, start the acquisition, and save the images. It also handles the movement of the stages and the DAQ.
+    This it the main class used to control the acquisition of images. It takes the two other classes, stages_movement and VoiceCoil_nidaqmx as input and calls specific functions from them.
+    The main function of this class is to set up the acquisition parameters, start the acquisition, and save the images. It also handles the timing of movement of the stages and the DAQ.
     The class is designed in 3 different parts:
     1.
     This code is designed to be able to configure and setup each of the giving parameters used in the microscope. 
-    This includes but are not limited to: The camera, the save location and name, the DAQ, home and boundary of tge stages etc.
+    This includes but are not limited to: The camera, the save location and name, define callback functions etc.
     2.
     This code is the main operator when it comes to the acquisition. This means it control whenever the acquisition should start, stop, pause etc.
-    The code is also the main operator for fail safes implementation. This includes logging each images parameters and timing, to be able to debug issues
+    The code is also the main operator for fail safes implementation. This includes logging each images parameters and timing, to be able to debug issues.
+    The acquisition works with multiple threads. This means that care should be taken to make sure every threads are started, defined and stopped.
     3.
     Saving the images. Right now this code uses big tiff as a file format. This can be changed by changing the package from tifffile to another package and of course updating the syntax in the saving function.
-    It also has default saving operation and naming operation, to ensure files are not overwritten, and a logical naming convention. 
-    It also has a queue system to ensure that the saving is not lagging behind the acquisition. This is important to ensure that the acquisition is not stopped due to saving issues.
-    And lastly the system is running on a seperate thread to ensure that the acquisition is not slowed down if saving has issues, or large files. 
+    It also has default saving operation and naming operation, to ensure files are not overwritten, and a logical naming convention. NB: There is no failsafe on the custom names given to files. Custom names are currently not implemented correctly. 
+    It also has a queue system to ensure that the saving is not lagging behind the acquisition. This is important to ensure that the acquisition is not stopped due to saving issues. MaxQueue size should be changed to the specific acquisition probably. Keep in mind the ram usage
+    And lastly the saving is running on a seperate thread to ensure that the acquisition is not slowed down if saving has issues, or large files. 
     This is furthermore improved by using a pause when the stages move tiles. This ensures that the saving does not lag too far behind.
 
-    This descriptive text is last editet 07-08-2026 by Mathias Rising
-    Main Author: Mathias Rising
+    Terminology:
+        Jog and move_to:
+        These are also called relative move (jog) and absolute move(move_to). Only move_to supports multi axis movement. 
+        
+        Sequence:
+        Sequence is sometimes used synonymously with acquisition. It essentially means one round of acquisition. 
+
+        Pause:
+        This is a relic from when the pause function was something else. Now it more accurately can be described as tiling. 
+
+        pymmcore:
+        If at any time pymmcore is written it actually means pymmcore-plus. 
+        In this code pymmcore-plus and micromanager is also taken as synonymously most of the time.
+
+    This descriptive text is last editet 07-27-2026 by Mathias Hove Rising
+    Main Author: Mathias Hove Rising
     Created for the Bewersdorf lab and the pan-ASLM microscope.
     '''
     def __init__(
@@ -50,45 +65,73 @@ class Acquisition:
         config_path: str = r"\Users\Hannah\Desktop\configuration\PVCAM_only.cfg" #The configuration path. For now it's hard coded, though this can be changed to be a parameter in the future.
     ):
         
+        '''
+        Here we basically defined the parameters for the micromanager core used.
 
-        self.mmc = CMMCorePlus.instance() #If there is not previous instance, we of course create a new one.
-        #print('mmc is being defiend as MDA mmc')
+        self.mmc:
+        This defined as the micromanager core and where the Camera device adapter lies. 
         
-        #This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
-        #print('mmc is enabling debulog')
+        self.mmc.enableDebugLog(True):
+        This should probably be changed to a parameter in the future, but for development purposes it is always true, to ensure that we don't miss crucial debugging information.
+        
+        self.mmc.loadSystemConfiguration(config_path):
+        Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
+
+        self.mmc.setAutoShutter(False):
+        The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
+        '''
+        #print('mmc is being defiend as MDA mmc') -> This is a debuggin tool to check if __init__ crashes and if so where it does
+        self.mmc = CMMCorePlus.instance()
+        
+        #print('mmc is enabling debulog') -> This is a debuggin tool to check if __init__ crashes and if so where it does
         self.mmc.enableDebugLog(True)
 
-        # Load the correct configuration file. NB! If a new configuration file is created, change the path to the new configuration file
-        #print('loading system config')
+        #print('loading system config') -> This is a debuggin tool to check if __init__ crashes and if so where it does
         self.mmc.loadSystemConfiguration(config_path)
 
-        #The auto shutter should already be disabled in the config file, but just to be sure it is disabled here. If the autoshutter is not turned off, it can lead to issues.
-        #print('mmc autoshutter is turned off')
+        #print('mmc autoshutter is turned off') -> This is a debuggin tool to check if __init__ crashes and if so where it does
         self.mmc.setAutoShutter(False)
 
-
-        #Now we name the other classes to be used in the class. They are of course also set to instance variables to ensure use in the entire class
-        #print('mmc setup is done.')
+        '''
+        Now we define the other engines used, so we can call them later in the class. If at any time you want to use a different engine, just change the input engine. 
+        NB: remember function names are already defined, so either those need to be the same in the new engine or changed in this class
+        '''
+        #print('mmc setup is done.') -> This is a debuggin tool to check if __init__ crashes and if so where it does
         self.stages_movement = stages_movement
         self.DAQ_VC = DAQ
         
+        '''
+        Now we define the camera parameters. These are set as default for the voice coil at 1 fps and 24 ms flyback. 
+        The default is arbitrary as they are not set directly using pymmcore plus
+
+        The purpose of the default is so the software can just run setup and start and an acquisition will begin. 
+        If a different default is wished, this will not break anything. 
+        Keep in mind:
+        These values are first set in the setup function.
+        Edge trigger shouldn't be changed as then hardware triggering is impossible
+        '''
         
-        #Setup the default Camera settings for 1 fps rolling shutter. In the future this should probably be loaded as a config file, to make it easy to change the settings. But for now it is hard coded.
         self._exposure  = 2.44 #Exposure of the camera in ms. Correct exposure for 24 ms flyback can be found in the manual for the microscope.
         self._scan_width = 8 #Scan width of the rolling shutter. Default is 8 for higher intensity. 4 is diffraction limited and should be used for imaging.
         self._scan_direction = 'Up' #Scan direction of the rolling shutter. Down is default for the camera, so this should always be changed to up, UNLESS the scan direction is cahnged for the voice coil. (Current setup is min V to max V)
         self._trigger  = 'Edge Trigger' #The trigger mode. The setup is currently only setup to work in hardware trigger mode. If live features are implemented it should proabably be set to internal trigger.
         self._Port = 'Dynamic Range' #The port of the camera. Sensitivity is the default for live. Dynamic range is the default for imaging.
-        
+        '''
+        This is simply just booleans to keep track what code is running. Feel free to add more.
+        '''
         #Booleans to check waht code has run. 
         self._setup = False #This is an instance boolean variable to ensure that proper setup is done before acquiring images. This is to make sure that the user does not damage devices by not setting them up beforehand.
         self._sequence = None # This is an old check for sequencing. Should be deleted unless it is used in the future. It is currently not used anywhere in the code.
-        
+        '''
+        Now we define the variables which are important for the DAQ. These are set to defaulting for the exact same reason as before
+        '''
         #DAQ variables
         self._cali_path = self.DAQ_VC.cali_path # This is the current calibration file in use. Currently the calibration file is hard coded in the DAQ class, but it should be changed to be a parameter in the future. The calibration is deciding the framerate in the DAQ class. 
         self._channels = ['488'] # Different colors of lasers. This is also used in the DAQ, but keep in mind it is also used for saving purposes.
 
-        #Acquisition parameters. These are calculated or inputted by the user, so are just set to a single image in the initiation.
+        '''
+        These are all acquisition parameteres specifically with the purpose of defining everything needed for acquisition
+        '''
         self._X = 1 # Number of tiles in the X direction
         self._Y = 1 # Number of tiles in the Y direction
         self._meta = 1 # Number of repitions. Currently not correctly implemented.
@@ -102,11 +145,19 @@ class Acquisition:
         self._lag_limit = None # The lag limit of the saving thread. This number should be reasonable. NB: If there actually is lagging behind there is a problem with the speed or saving. This is a failsafe. If this actually triggers there may be something wrong.
         self._disk = Path('E:') # The disk to save the images to. Currently hard coded to the computer in use.
 
-        
-        # Instance variables defined. Should not be changed by the user. These are mostly used for counting purposes.
-        self._running = False
-        self._finished_event = threading.Event()
-        self._finished_event.set()   # idle initially
+        '''
+        There is a lot of instance variable defiend here.
+        THESE SHOULD NOT BE ADJUSTED BY THE USER, ONLY THE DEVELOPER.
+        These are either defined here so we can define them later.
+        or they have a purpose, like the self._running showing if the acquisition is running or not.
+
+        Keep in mind some parameters are 0 index while some others are 1 indexed. Keep this in mind especially when modifying with the counters used in the threads and callback
+        If something is set to None, it is to accomodate defining it later correctly.
+        '''
+        #Instance variables defined. Should not be changed by the user. These are mostly used for counting purposes.
+        self._running = False # A boolean that communicates if the code is in the middle of an Acquisition
+        self._finished_event = threading.Event() # A threading event used in the GUI, again to keep track on status
+        self._finished_event.set() # idle initially
         self._stack_height = 1 # Stack height is the number of total slices in a Z stack
         self._frames = 1 # Total number of frames to be acquired. This is calculated from the other parameters.
         self._idx_frame = 0 # Current frame index. This is used to keep track
@@ -122,15 +173,35 @@ class Acquisition:
         self._stop_thread = None # This is a parameter defined as an event, with the purpose of stopping the saving thread. 
         self._save_thread = None # This is the saving thread. 
         self._acquire_thread = None # The thread used for acquiring images from the camera
-        self._acquire_event = None
-        self._stop_sequence_thread = None
-        self._stop_sequence_event = None
-        self._jog_thread = None
-        self._jog_event = None
-        self._pause_thread = None
-        self._pause_event = None
-        self._count = 0
+        self._acquire_event = None #The event used to call the acquire thread
+        self._stop_sequence_thread = None # The thread used to stop the acquisition
+        self._stop_sequence_event = None # The event to call the stop_sequence_thread
+        self._jog_thread = None # The thread that jogs the stage
+        self._jog_event = None # The event that triggers the _Jog_thread
+        self._pause_thread = None # Called the pause thread, but more accurately is the tiling thread. 
+        self._pause_event = None # Communicates when a Zstack is done and triggers the thread to move to the next tile
+        self._count = 0 #
         self._pause_status = False
+
+
+    '''
+    This next section is all the different parameters which can be changed by the user. 
+
+    If you do not know what exactly this means let me explain:
+
+    @property
+    is a way of a custom property which returns whatever we want it to return. 
+    Most often this is used to give descriptive text to the different parameters, along with the possibility of returning additional information if necessary.
+    (an example could be that calling channels could return all possible channels currently implemented)
+    This is most often only relevant if calling in the terminal
+
+    @property.settter
+    This is a way of defining additional constraints when defining the parameter later. 
+    How to call it is to say "MDA.channels = ['488']"
+    A feature that could be implemented then is to check if the input is valid (like in this case check that its a list of str), set min and max etc. 
+
+    If these features are not desired the etire section with @property and .setter is safe to delete.
+    '''
     @property
     def channels(self) -> list:
         # The channels (laser colors) used for acquisition. Example: ['488'] or ['488', '560']. 
@@ -323,12 +394,20 @@ class Acquisition:
 
 
     def connect_stages(self):
-        # This functions purpose is to connect to the stages if for some reason there is a disconnect.
-        # If a disconnect happens, the program should probably be restarted, but this is defined primarily for future crash security.
-        # The idea is to implement if the stages are disconnected, then the program will try to reconnect and continue from where it left off
+        ''' 
+        This functions purpose is to connect to the stages if for some reason there is a disconnect.
+        If a disconnect happens, the program should probably be restarted, but this is defined primarily for future crash security.
+        The idea is to implement if the stages are disconnected, then the program will try to reconnect and continue from where it left off
+        '''
         self.stages_movement.connect_controller()
 
     def _pause_threading(self):
+        '''
+        This entire thread is continously checking if a stop event has been set.
+        If the stop event is not set and the pause event is set it will then clear the event (preventing repetition) and run the _pause function.
+
+        If not it will go back to wait. This thread is created and started when in run_sequence.
+        '''
         while not self._stop_thread.is_set():
             trigger = self._pause_event.wait(timeout = 5)
             if not trigger:
@@ -343,12 +422,25 @@ class Acquisition:
         self,
         duration: float = None
     ):
+        '''
+        This function is an instance function.
+        This is the pause function used to move tiles and pause between tiles. 
+        The pause duration can be adjusted and removed. (based on a theory of gel needing to settle (Currently not experimentally proven))
+        There is also a pause status essentially just stopping other threads from triggering which should be idle in while moving tiles
         
-        # This function is an instance function.
-        # This is the pause function used to move tiles and pause between tiles. 
-        # The current theory is that the gel needs time to settle, so after moving it should have a small delay
-        # The pause duration can be set before the acquisition.
-        # There also is a pause to catch up to saving, if the saving is lagging behind. This is a failsafe to ensure that the acquisition does not stop due to saving issues.
+        There is an important ordering to this function. 
+            First the DAQ is stopped
+            Then there is a wait for images to reach the buffer.
+            Then the buffer is drained using the acquire thread.
+            Then we wait for the saving to be caught up.
+            Now we stop the camera
+        
+        Aside from the last 2 steps (which can be swapped without much loss), This ordering is very important as stopping the camera deletes all images in the buffer and all images on the way to the buffer
+
+        Lastly it moves the stages to the next tiling. 
+        Then starts the camera and then the DAQ.
+        '''
+        
         expected_frames = self._count
         if not self._silence:
             print(f"status: Images in the buffer: {self.mmc.getRemainingImageCount()}. Images acquired: {self._idx_frame}. Images in queue: {self._queue.qsize()}. Images saved: {self._idx_slice + (self._stack*self._stack_height)}")
@@ -358,10 +450,6 @@ class Acquisition:
         self._pause_status = True
         if duration is not None:
             self._pause_duration = duration
-      
-        #MIGHT BE CHANGED. KEEP IN MIND.
-        # We start off by stopping the sequence acquisition and the DAQ.
-        # This is to ensure that no images are taken and the callback function isn't called while stages are moving.
         
         t_pause_start_1 = time.perf_counter()
         while self.mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
@@ -371,6 +459,7 @@ class Acquisition:
                 self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
                 break
             time.sleep(0.05)
+
         while self.mmc.getRemainingImageCount() > 0:
             self._acquire_event.set()
             if time.perf_counter() - t_pause_start_1 > 10:
@@ -741,8 +830,7 @@ class Acquisition:
             self._setup_camera()
             
             self._setup_daq()
-            
-            self.setup_save()
+        
 
             self._setup = True
         except Exception as e:
@@ -787,6 +875,7 @@ class Acquisition:
         self._pause_status = False
         self._finished_event.clear()    
         self._queue = Queue()
+        self.setup_save()
         self._create_threads()
         if X is None:
             self._current_X = 1
@@ -954,3 +1043,5 @@ class Acquisition:
             print(f"Could not close DAQ: {e}")       
         self.stages_movement.close()
 
+
+# %%

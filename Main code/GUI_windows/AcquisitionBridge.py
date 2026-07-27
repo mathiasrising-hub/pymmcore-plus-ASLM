@@ -20,6 +20,8 @@ class AcquisitionBridge(QObject):
         self.engine.setup_sequence(
             z_depth=cfg.z_depth,
             z_stepsize=cfg.z_stepsize,
+            x_tiles = cfg.x_tiles,
+            y_tiles = cfg.y_tiles,
             channels=cfg.channels,  # or tuple; must support len() and iteration
             saving=cfg.saving,
             filename=cfg.filename,

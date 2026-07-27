@@ -45,11 +45,18 @@ class AcquisitionPanel(QWidget):
         self.z_depth.setDecimals(3)
         self.z_depth.setValue(0.1)
 
-        
         self.z_stepsize = QDoubleSpinBox()
         self.z_stepsize.setRange(0.00001, 10000.0)
         self.z_stepsize.setDecimals(6)
         self.z_stepsize.setValue(0.0002)
+
+        self.X_tiles = QSpinBox()
+        self.X_tiles.setRange(1, 1000)
+        self.X_tiles.setValue(1)
+
+        self.Y_tiles = QSpinBox()
+        self.Y_tiles.setRange(1, 1000)
+        self.Y_tiles.setValue(1)
 
 
         self.save_path = QLineEdit()
@@ -63,6 +70,8 @@ class AcquisitionPanel(QWidget):
         self.ch_488 = QCheckBox("488")
         self.ch_560 = QCheckBox("560")
         self.ch_488.setChecked(True)
+        self.saving = QCheckBox('Saving')
+        self.saving.clicked.connect(self._save_toggle)
 
         ch_row = QHBoxLayout()
         ch_row.addWidget(self.ch_488)
@@ -70,8 +79,11 @@ class AcquisitionPanel(QWidget):
         ch_row.addStretch(1)
 
         params_layout.addRow("Exposure (ms)", self.exposure_ms)
-        params_layout.addRow("Z_stepsize", self.z_stepsize)
-        params_layout.addRow('Z_depth', self.z_depth)
+        params_layout.addRow("Z_stepsize (mm)", self.z_stepsize)
+        params_layout.addRow('Z_depth (mm)', self.z_depth)
+        params_layout.addRow("X tiles", self.X_tiles)
+        params_layout.addRow("Y tiles", self.Y_tiles)
+        params_layout.addRow("Enabled", self.saving)
         params_layout.addRow("Save to", save_row)
         params_layout.addRow("Channels", ch_row)
 
@@ -148,10 +160,11 @@ class AcquisitionPanel(QWidget):
             exposure_ms=float(self.exposure_ms.value()),
             z_depth=float(self.z_depth.value()),
             z_stepsize=float(self.z_stepsize.value()),
+            x_tiles=int(self.X_tiles.value()),
+            y_tiles=int(self.Y_tiles.value()),
             channels=channels,
             save_path=Path(self.save_path.text().strip()) if self.save_path.text().strip() else None,
-            # saving stays false unless you add a checkbox later
-            saving=True,
+            saving=bool(self.saving.isChecked()),
             filename="Zstack",
             foldername="Default",
         )
@@ -184,6 +197,9 @@ class AcquisitionPanel(QWidget):
         self.status_message.emit("Setup requested")
         self.acq.setup(cfg)
 
+    def _save_toggle(self):
+        engine = getattr(self.acq, "engine", None)
+        engine._save = bool(self.saving.isChecked())
 
     def _on_start(self):
         try:
