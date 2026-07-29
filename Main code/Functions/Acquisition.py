@@ -111,8 +111,8 @@ class Acquisition:
         Edge trigger shouldn't be changed as then hardware triggering is impossible
         '''
         
-        self._exposure  = 2.44 #Exposure of the camera in ms. Correct exposure for 24 ms flyback can be found in the manual for the microscope.
-        self._scan_width = 8 #Scan width of the rolling shutter. Default is 8 for higher intensity. 4 is diffraction limited and should be used for imaging.
+        self._exposure  = 1.22 #Exposure of the camera in ms. Correct exposure for 24 ms flyback can be found in the manual for the microscope.
+        self._scan_width = 4 #Scan width of the rolling shutter. Default is 8 for higher intensity. 4 is diffraction limited and should be used for imaging.
         self._scan_direction = 'Up' #Scan direction of the rolling shutter. Down is default for the camera, so this should always be changed to up, UNLESS the scan direction is cahnged for the voice coil. (Current setup is min V to max V)
         self._trigger  = 'Edge Trigger' #The trigger mode. The setup is currently only setup to work in hardware trigger mode. If live features are implemented it should proabably be set to internal trigger.
         self._Port = 'Dynamic Range' #The port of the camera. Sensitivity is the default for live. Dynamic range is the default for imaging.

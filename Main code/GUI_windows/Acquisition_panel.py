@@ -69,6 +69,7 @@ class AcquisitionPanel(QWidget):
 
         self.ch_488 = QCheckBox("488")
         self.ch_560 = QCheckBox("560")
+        self.ch_640 = QCheckBox("640")
         self.ch_488.setChecked(True)
         self.saving = QCheckBox('Saving')
         self.saving.clicked.connect(self._save_toggle)
@@ -76,6 +77,7 @@ class AcquisitionPanel(QWidget):
         ch_row = QHBoxLayout()
         ch_row.addWidget(self.ch_488)
         ch_row.addWidget(self.ch_560)
+        ch_row.addWidget(self.ch_640)
         ch_row.addStretch(1)
 
         params_layout.addRow("Exposure (ms)", self.exposure_ms)
@@ -156,6 +158,8 @@ class AcquisitionPanel(QWidget):
         channels = []
         if self.ch_488.isChecked(): channels.append("488")
         if self.ch_560.isChecked(): channels.append("560")
+        if self.ch_640.isChecked(): channels.append("640")
+                
         cfg = AcqConfig(
             exposure_ms=float(self.exposure_ms.value()),
             z_depth=float(self.z_depth.value()),
@@ -178,7 +182,8 @@ class AcquisitionPanel(QWidget):
         self.save_path.setEnabled(not running)
         self.ch_488.setEnabled(not running)
         self.ch_560.setEnabled(not running)
-
+        self.ch_640.setEnabled(not running)
+                
         self.setup_btn.setEnabled(not running)
         self.start_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)

@@ -410,6 +410,15 @@ class VoiceCoil_nidaqmx:
         self._blank.write(True, auto_start = True)
         self._task_co.start()
 
+    def VC_stop(self):
+        self._task_co.stop()
+        self._task_ao.stop()
+        self._blank.write(False,auto_start = True)
+
+    def VC_start(self):
+        self._blank.write(True, auto_start = True)
+        self._task_ao.start()
+        self._task_co.start()
 
     def stop(self,
              cameras: int = 1):
