@@ -94,10 +94,10 @@ class VoiceCoil_nidaqmx:
         self._saving_function = None
 
 
-'''
+    '''
     # We start by adding some easy way of changing the properties of the DAQ. This is mostly used in debugging as for normal use the default values are sufficient.
     # The exception is the calibration path, that needs to be set to the current depending on the framerate. 
-'''
+    '''
     @property
     def name(self) -> str:
         # The name of the DAQ. The Default name is: "Dev1/"
