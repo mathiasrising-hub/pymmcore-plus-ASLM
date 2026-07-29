@@ -1,15 +1,27 @@
 
 from acspy import acsc
 from acspy.control import Controller
-import threading
+import threading # not used afaik
 import time
-import sys
+import sys# not used afaik
 import numpy as np
-import subprocess as sp
-#This document has all the functions related to stage movement.
-class stages_movement:
+import subprocess as sp# not used afaik
 
+class stages_movement:
+    '''
+    This class is currently implementing the community package acspy, and not the official package from PI.
+    
+    The purpose of this class is to allow for full control over the stages.
+
+    IMPORTANT:
+    Axis 0 = X axis
+    Axis 1 = Y axis
+    Axis 2 = Z axis
+    '''
     def __init__(self):
+        '''
+        Simple defining boundary and home, along with connecting to the controller
+        '''
         self._controller = Controller(contype='ethernet',n_axes=3)
         self._controller.connect()
         self._boundary = np.array([[-40, 20], [0.5, 18],[-0.5, 5]])
@@ -17,6 +29,10 @@ class stages_movement:
 
 
     def connect_controller(self):
+        '''
+        This has almost never been called but is essentially jsut a way of connecting the controllers again. 
+        Mostly for debugging purposes
+        '''
         try:
             self._controller = Controller(contype='ethernet',n_axes=3)
             self._controller.connect()
@@ -24,6 +40,10 @@ class stages_movement:
             print(f'controller could not connect: {e}')
     
     def get_pos(self):
+        '''
+        This is a way of getting the current position of each stage.
+        It then returns the position
+        '''
         controller = self._controller
         ax0 = controller.axes[0]
         pos0 = ax0.rpos
@@ -33,7 +53,9 @@ class stages_movement:
         pos2 = ax2.rpos
         return [pos0, pos1, pos2]
     
-
+    '''
+    These next functions are all different ways of enabling and disabling the individual stage motors.
+    '''
     def disable_x(self):
         ax0 = self._controller.axes[0]
         ax0.disable()
@@ -87,6 +109,15 @@ class stages_movement:
     def set_home(
         self
     ):
+        '''
+        This functions sets the home of the stages. 
+        This is NOT NECESSARY with the encoder. 
+
+        It works by stopping and needing to move the stage to one edge of the chamber.
+        Then you do it again and the stage will set the home in the middle of those 2 positions. 
+
+        This also defined the boundary
+        '''
         ax0 = self._controller.axes[0]
         ax1 = self._controller.axes[1]
         ax2 = self._controller.axes[2]
@@ -118,6 +149,11 @@ class stages_movement:
         self._boundary = np.array([ax0_bounds, ax1_bounds_sorted, ax2_bounds])
     
     def begin_set_home(self):
+        '''
+        The same thing as set_home, but a GUI version so it can be implemented in the GUI. 
+
+        This has some supporter functions further down.
+        '''
         ax0 = self._controller.axes[0]
         ax1 = self._controller.axes[1]
         ax2 = self._controller.axes[2]
@@ -158,18 +194,28 @@ class stages_movement:
         self._home = np.array([ax0_home, ax1_home, ax2_home], dtype=float)
         self._boundary = np.array([self._ax0_bounds, ax1_bounds_sorted, self._ax2_bounds], dtype=float)
         return self._home, self._boundary
-    def move_home(self):
+
     
+    def move_home(self):
+        '''
+        Simple function that moves the stages to the designated home
+        '''
         self.move_to(
             self._home
         )
     def jog(self, axis, distance):
+        '''
+        Also known as a relative move.
+        This is a function that moves the stage in a single axis. 
+        It has a software check on boundaries and a check if input is valid.
+        '''
         #First off we check if the axis is valid. Since we have a XYZ stage, it should be an integer between 0-2
         boundary = self._boundary
         if axis not in (0,1,2):
             print('Not a valid axis!')
             return 
         controller = self._controller
+
         #We define some variables to use later.
         ax = controller.axes[axis]
         pos = ax.rpos
@@ -181,7 +227,11 @@ class stages_movement:
         
         #ax.ptpr is a relative move (jog). We send a signal to move the distance given in the function. 
         acsc.toPoint(controller.hc,0,axis,pos+distance)
- 
+
+
+        #This is a check to see if it's in position
+        #NB: this should not be changed to check if its "inPosition", which is a signal the stages can give
+        #This has too long of a delay.
         TARGET = pos + distance
         TOLERANCE = 0.000001 
 
@@ -193,10 +243,12 @@ class stages_movement:
         return
 
 
-
-    #We next want to define a multi axis movement. The input is a 1 dimensional array of 3 coordinates. 
-    #This function then checks if the movement is possible, and afterwards move in all axes simultanously.
     def move_to(self, coordinates):
+        '''
+        This is a function that makes an absolute move in all 3 stages.
+        It takes the end coordinates as the position to move to. 
+        It also, like the jog, has multiple failsafes and boundary checks to avoid problematic movement.
+        '''
         controller = self._controller
         boundary = self._boundary
         #First we want to check if the input is in the correct format. If it isn't the function stops to prevent errors.
@@ -245,6 +297,9 @@ class stages_movement:
         return
 
     def close(self):
+        '''
+        disconnect the controller
+        '''
         self._controller.disconnect()
 
 
