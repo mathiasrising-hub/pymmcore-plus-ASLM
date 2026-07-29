@@ -1,35 +1,29 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[5]:
-
-
 import nidaqmx
 import numpy as np
 import warnings
-import time
+import time # not currently used
 warnings.simplefilter("ignore", nidaqmx.errors.DaqResourceWarning)
-
-
-# In[6]:
-
 
 class VoiceCoil_nidaqmx:
     '''
-    Descriptive text last updated: 6/30/2026. Code by the Bewersdorf lab - Mathias Rising main author.
+    Descriptive text last updated: 7/28/2026. Code by the Bewersdorf lab - Mathias Rising main author.
     
     This class is the class used for alle control of the DAQ currently implemented in the pan-ASLM.
     
-    The main goal of this code is to set up the DAQ for acquisition. Future development will also add dynamically changing aspects while in live mode.
-
+    The main goal of this code is to set up the DAQ for acquisition. 
+    
     Current main implementations are the setup for the individual pins for analog and digital output. 
     Analog controls the voice coil, while digital controls the blanking of the lasers
     
-    There is also a trigger generated depending on the framerate of the settings set in the Acquisition code. 
-    This triggers the camera, the voice coil and the sweep. 
+    There is also a trigger generated depending on the framerate of the calibration file.
+    This is the master trigger for the camera.
 
-    Lastly there is a digital input wired to the camera, that decides when a frame is recieved for saving purposes. 
-    The saving function is in the Acqusition class, but the triggering happens here. 
+    Lastly there is a digital input wired to the camera, This is what the acquisition links the callback function to.
+
+    Right now some quirks are:
+    - The calibration path does not have a GUI element, and needs to be set manually throught the terminal
+    - The global blanking does not work during testing.
+    - The individual blanking is not turned off when the acquisition ends.  
     '''
     def __init__(
         self,
@@ -38,6 +32,17 @@ class VoiceCoil_nidaqmx:
         cali_path: str = "E:\\2026-6-17\\calibration file_1fps_24ms_2",
         sample_rate: float = 10000
         ):
+        '''
+        There is a lot of variable needed. 
+        The important thing to not here is 2 part:
+            
+            This is where ALL the adresses for the different input and output are defined.
+            Remember to define these to the relevant DAQ card used.
+
+            The calibration path is the one defining feature for framerate every else.
+            There also is no place to define in the calibration path through the GUI.
+            The calibration is the one big question mark for future development. 
+        '''
         #This is a currently unused definition to check if the setup has run. Later implemenation will add it to make sure DAQ doesn't run without proper setup.
         self._registered = False
         
@@ -58,7 +63,7 @@ class VoiceCoil_nidaqmx:
         self._dev_name = name
         self._address_ao_mirror = 'ao0' #This is the voice coil
         self._address_do_ctr = 'ctr0' #Trigger that triggers the camera
-        self._address_do_ctr1 = 'ctr1'
+        self._address_do_ctr1 = 'ctr1' # Unused
         self._address_do_488 = 'port0/line24' #488 nm Laser
         self._address_do_560 = 'port0/line23' #560 nm Laser
         self._address_do_595 = 'port0/line20' #595 nm Laser
@@ -89,10 +94,10 @@ class VoiceCoil_nidaqmx:
         self._saving_function = None
 
 
-
+'''
     # We start by adding some easy way of changing the properties of the DAQ. This is mostly used in debugging as for normal use the default values are sufficient.
     # The exception is the calibration path, that needs to be set to the current depending on the framerate. 
-
+'''
     @property
     def name(self) -> str:
         # The name of the DAQ. The Default name is: "Dev1/"

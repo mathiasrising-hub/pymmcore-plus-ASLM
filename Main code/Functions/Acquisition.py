@@ -54,7 +54,17 @@ class Acquisition:
         If at any time pymmcore is written it actually means pymmcore-plus. 
         In this code pymmcore-plus and micromanager is also taken as synonymously most of the time.
 
-    This descriptive text is last editet 07-27-2026 by Mathias Hove Rising
+        saving:
+        While most of the saving relates to saving images in tiff files, there is an exception
+        Sometimes the callback function may be referred to as a saving function. 
+        Most obvious in the DAQ class. The reason was because of an old implementation, and should be changed.
+
+        instance function:
+        I write if it's an instance function or not in the descriptive text of functions. 
+        This is to make it clear if the function is intended to be accessible to the user (most likely through the GUI)
+        These can all still be called in the terminal if wished.
+
+    This descriptive text is last edited 07-28-2026 by Mathias Hove Rising
     Main Author: Mathias Hove Rising
     Created for the Bewersdorf lab and the pan-ASLM microscope.
     '''
@@ -441,6 +451,7 @@ class Acquisition:
         Then starts the camera and then the DAQ.
         '''
         
+        # Stop DAQ and initial setup for tiling
         expected_frames = self._count
         if not self._silence:
             print(f"status: Images in the buffer: {self.mmc.getRemainingImageCount()}. Images acquired: {self._idx_frame}. Images in queue: {self._queue.qsize()}. Images saved: {self._idx_slice + (self._stack*self._stack_height)}")
@@ -450,7 +461,8 @@ class Acquisition:
         self._pause_status = True
         if duration is not None:
             self._pause_duration = duration
-        
+
+        # wait until images reaches the buffer
         t_pause_start_1 = time.perf_counter()
         while self.mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
             self._acquire_event.set()    
@@ -459,7 +471,7 @@ class Acquisition:
                 self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
                 break
             time.sleep(0.05)
-
+        # Drain the buffer (might be unnecessary, could be replaced with self._acquire_event.set())
         while self.mmc.getRemainingImageCount() > 0:
             self._acquire_event.set()
             if time.perf_counter() - t_pause_start_1 > 10:
@@ -467,7 +479,7 @@ class Acquisition:
                 self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the pause function.\n")
                 break
             time.sleep(0.05)
-        
+        #Wait for saving thread to catch up. 
         t_pause_start = time.perf_counter()        
         if self._queue.qsize() > self._lag_limit:
             print('Saving is lagging behind. Stopping acquisition until caught up to limit...')
@@ -479,10 +491,11 @@ class Acquisition:
                 time.sleep(0.001)
             print('Saving is caught up!')
        
-
+        #stop the camera
         if not self._silence:
             print(f"Pausing Acquisition at {time.perf_counter() - self._tstart}")
         self.mmc.stopSequenceAcquisition()
+
         # We now check if we are at the last tile in the X direction. 
         # If we are not, we move to the next tile in the X direction. 
         # If we are, we move to the next tile in the Y direction and change the direction of movement in the X direction.
@@ -500,22 +513,16 @@ class Acquisition:
             self._move_forward = not self._move_forward
             self._start_pos[1] = self._start_pos[1] + self._tile_move
 
-        #We not move to the position of the next tile
         # Improvement: This should be changed to not redefining the self._start_pos, but have a seperate one. 
-        # This is to ensure we know exactly where it started from, so it is easier to move back. 
+        # This is to ensure we know exactly where it started from, so it is easier to move back.
+        # Move the stage
         self._move_to(self._start_pos)
         if not self._silence:
             print(f"Ending move at {time.perf_counter() - self._tstart}")
 
-        #Now we actually pause the function. 
-        # Since _move_to is not a blocking function, this will pause the script while the stages are moving.
-
+        # Adjustable pause
         time.sleep(self._pause_duration)
 
-        #Lastly we check if the saving is lagging behind. 
-        # If it is, then we pause the function and wait till it's caught up.
-        # NB: There should be implemented a timeout to make sure that it's not stuck indefinetly if the saving thread is stuck for some reason.
-        
         # Now we start the sequence acquisition and the DAQ again.
         if not self._silence:
             print(f"starting again at {time.perf_counter() - self._tstart}")
@@ -532,15 +539,23 @@ class Acquisition:
     ):
         '''
         This function is an instance function. 
-        This function is called by the saving thread.
+        This function is called by the _saving_thread().
         This function works very simply by writing the image in the tiff file. 
         It then checks if then checks if we are at the end of the stack.
         If we are, then the tiff file is closed and new tiffiles for each channels are opened.
+
+        NB:
+        If alternative acquisition modes are implemented remember to modify when it closes and creates new files
         '''
+        #save the image
         tif.write(image, photometric='minisblack')
+
+        #Check if we at the end of a Zstack
         if self._idx_slice >= self._stack_height:
+            #reset counters
             self._stack += 1
             self._idx_slice = 0
+            #close and create new tiff files
             for chan in self._channels:
                 getattr(self, f"_tif{chan}").close()
                 if self._stack < self._tiles:
@@ -551,7 +566,7 @@ class Acquisition:
         self
     ):
         '''
-        This function is an instance function.
+        This function is an instance function. It also is a seperate thread
         This is the main thread used for saving.
         The main method is to set up a while loop that checks if the stop condition is set.
         Then it gets the last image from the queue.
@@ -559,33 +574,54 @@ class Acquisition:
         Afterwards, some information about timing and slice nr and such is written in the log.
         There is a if statement that checks for every 100 images it does a flush, which means it writes into the log from the buffer to make sure it never clutters up.
         Lastly there are some exceptions, mostly for if error happens, or if there is no image in the queue.
+
+        NB:
+        This assumes a queue with First in First Out property. If alternative sorting methods are used this should be changed
+        It also is hardcoded to only flush at every 100 frames. This could be a problem if less than 100 frames are in a Zstack. Keep that in mind.
+        The trry except has not yet been relevant but are failsafes
         '''
         while True:
+            #Check if the thread should stop
             if self._stop_thread.is_set() and self._queue.empty():
                 break
             try:
+                #Get the image
                 t1 = time.perf_counter()
                 image = self._queue.get(timeout = 2)
                 try:
                     t1 = time.perf_counter()
+
+                    #Define/increase counters
                     self._idx_slice += 1
                     chan_idx = (self._idx_slice-1) % len(self._channels)
+
+                    #Get the tiff file
                     tif = getattr(self, f"_tif{self._channels[chan_idx]}")
                     if not self._silence:
                         print(f"Saving image in {tif}. Slice nr{self._idx_slice}, channel {self._channels[chan_idx]}, stack nr {self._stack}")
+
+                    #save the image in the tiff file
                     self._saving(tif,image)
                     t2 = time.perf_counter()
+
+                    #Log
                     self._file_save.write(f"Time: {t2-self._tstart}. Slice nr: {self._idx_slice} channel: {self._channels[chan_idx]} took {t2-t1}\n")
                     if self._idx_slice % 100 == 0:
                         self._file_save.flush()
+
                 except Exception as e:
+                    #Exception if something failed in the saving.
                     print(f"Error happened in the saving thread: {e}")
                     self._file_save.write(f"Error happened in the saving thread: {e}")
                     self._stop_thread.set()
                     break
+
                 finally:
+                    #Important to set the specific queue element to finished.
                     self._queue.task_done()
+
             except queue.Empty:
+                # Log if the queue is empty, unless Pause is underway
                 if self._pause_status:
                     continue
                 t3 = time.perf_counter()
@@ -601,20 +637,19 @@ class Acquisition:
             self
     ):
         '''
-        This is an instance function.
-        The function is used as a callback function for the DAQ class. 
-        Specifically the DAQ class calls to this function whenever the camera is done acquiring an image.
-        The purpose of this functin is to acquire an image and put it into the queue. 
-        Afterwards as long as none of the stage triggers are true, the code exits and wait for the next trigger.
-        
-        This code also functions as stage cotnrol. 
-        More specifically it "Jogs" (single axis relative move) the stage when all channels have been acquired.
-        It also calls the _pause function when the Zstack is done. This moves to the next tile. 
-        Lastly if all the frames has been taken it stops the acquisition. 
+        This is an instance function. This is a seperate thread.
+        The function is a while loop. The condition is just the _stop_thread.is_set() like all the other threads in this code.
+        This function then uses mmc.popNextImage() to get an np array of the current image in the camera. It also clear that image from the buffer
+        This is then pulled into a queue (which _saving_thread uses). 
+        Afterwards it logs and the loop continues and wait for the next trigger.  
         '''
         
         while not self._stop_thread.is_set() == True:
+
+            #Wait for trigger
             triggered = self._acquire_event.wait(timeout=2) 
+
+            #timout to prevent infinite loop
             if not triggered:
                 if self._pause_status:
                     continue
@@ -626,18 +661,25 @@ class Acquisition:
             while self.mmc.getRemainingImageCount() > 0:
                 tt = time.perf_counter()
                 self._idx_frame += 1
+
+                # Get the image from the circular buffer. Data structure is a np.array
                 image = self.mmc.popNextImage()
+
+                # This is debug for the buffer.
                 if self._idx_frame % 100 == 0:
                     self._file_acquire.write(
                         f"Buffer free: {self.mmc.getBufferFreeCapacity()} / "
                         f"{self.mmc.getBufferTotalCapacity()}\n"
                     )
                     self._file_acquire.flush()
+
+                #Put the image i nthe queue
                 if self._save:
                     self._queue.put(image)
                 if not self._silence:
                     print(f"Image acquired nr {self._idx_frame}")
 
+                # Logging
                 ttt = time.perf_counter()
                 self._file_acquire.write(f"Time: {ttt-self._tstart}. Image nr {self._idx_frame} acquired in: {ttt-tt}\n")
                     
@@ -647,22 +689,37 @@ class Acquisition:
         This is an internal function.
         This is the main callback function, which secures that the acquire thread keeps running. 
         This runs whenever the trigger is recieved from the camera. 
-        It sets the 
+        
+        It functions as the orchestrator, basically by triggering the other threads. 
+        It also keeps an eye on the progress and stops if acquisition is done or camera has crashed.
+
+        This runs on the main thread.
         '''
+        # prevent running if a pause is initiated (most likely from the _pause/tiling function)
         if self._pause_status:
             return
+        
+        #Increase counter
         self._count += 1
         ttt = time.perf_counter()
+
+        #Check status and stop if necessary
         if self._count >= self._frames or self.mmc.isSequenceRunning() == False:
             if not self._silence:
                 print('Stopping Acquisition')
             self._file_acquire.write(f"Time: {ttt-self._tstart}. Status of stopping Acquisition: Sequence running? {self.mmc.isSequenceRunning()}. Frames taken vs total frames: {self._count} vs {self._frames}. Total frames acquired: {self._idx_frame}.\n")
             self._stop_sequence_event.set()
             return
+
+        #Trigger the acquire thread
         self._acquire_event.set()
+
+        #If end of stack trigger the _pause thread
         if self._count % self._stack_height == 0:
             self._pause_event.set()
             return
+
+        #If not end of stack trigger the _jog thread
         chan = self._count % len(self._channels)
         if chan == 0:
             self._jog_event.set()
@@ -675,24 +732,40 @@ class Acquisition:
         '''
         This is an instance function.
         The main purpose of this is to setup the saving location of the tiff files. 
-        Furthermore it defines the name of the tiff files. 
+        Furthermore it defines the name of the tiff files. (This has a default of Zstack, but can be named whatever)
 
-        Lastly this is the code that defines the queue size and the threads used to save
+        NB:
+        Right now the custom naming of folder and filename has not been tested 
+        The default works fine, but keep in mind som debug should be handled.
+        The disk is also hardcoded for now.
+
+        NB:
+        Using a custom naming of the folder and save name of the file WILL DELETE A PREVIOUS ACQUISITION IF THEY ARE THE SAME.
+        There probably should be a failsafe, to make sure no accidental deletion happen. (like naming it _01 if there already is a folder of the same name)
         '''
+
+        # Disk is defined
         if disk == None:
             self._disk = Path('E:')
         else:
             self._disk = disk
+
+        #Get todays time and date
         today =datetime.datetime.now()
+
+        #Make a folder of the hours and minutes if the foldername is default. Make it of the folder name if not so
         if self._foldername == 'Default':
             time_m_s = today.strftime("%H_%M")
             save_dir = self._disk / self._datestring / time_m_s
         else:
             save_dir = self._disk / self._datestring / self._foldername
-
         save_dir.mkdir(parents=True, exist_ok=True)
+
+        #Make the path to the general Zstack file
         self._tif_path = save_dir / self._filename  
 
+        #Now generate a file for all channels in bigtiff.
+        #NB: if another filetype is desired, this is where it should be changed along with the _saving_function
         for chan in self._channels:
             setattr(self, f"_tif{chan}", tiff.TiffWriter(
                 str(self._tif_path) + f"{self._stack:05d}{chan}.tif", bigtiff=True
@@ -705,7 +778,11 @@ class Acquisition:
     ):
         '''
         This is an instance function. 
-        Its main purpose is to define the save path and make the folder.
+        Its main purpose is to make a general folder of todays date.
+        The saving structure works by having this as the parent folder and using setup_tiff as the daughter folder and tiff file.
+        ergo:
+        _save_path is the folder for the entire day.
+        _setup_tiff is the folder for the individual acquisition. 
         '''
         today =datetime.datetime.now()   # Get date
         self._datestring = today.strftime("%Y-%m-%d")  # Date to the desired string format
@@ -717,7 +794,9 @@ class Acquisition:
         '''
         This is an instance function
         The main purpose is to define the callback function of the DAQ. 
-        Importantly this should be done even if saving is not enabled, as it controls timing of everything.
+
+        NB:
+        The name is weird and is an artifact from a previous saving method. The "register_save" should be changed to "_register_callback"
         '''
         self.DAQ_VC.register_save(self._callback)
         
@@ -725,8 +804,10 @@ class Acquisition:
         self
     ):
         '''
-        This is a function to setup saving.
-        It just calls the callback function and if saving is enabled it uses the save path.
+        This is an instance function.
+        This just sets the callback and sets up the save path.
+
+        This is kinda unnecessary and should just be removed (calling the individual function in setup and run).
         '''
         self._set_callback()
         if self._save is False:
@@ -741,7 +822,12 @@ class Acquisition:
         this is an instance function.
         This function sets up the parameters for all the cameras. 
         It is assumed that all cameras want the same settings.
-        If this is not the case in the future (as only 1 camera is in use now), then the code needs to be changed
+        If this is not the case in the future (as only 1 camera is in use now), then the code needs to be changed.
+
+        NB:
+        Right now this does not interact with the pymmcore widget that sets the camera parameters. 
+        This function therefore should probably change or not be called at all (so you only set up the camera using the widget)
+        It can also be used as a way of dividing settings into preview/live mode and acquisition parameters. 
         '''
         for i in range(self._cameras):
             self.mmc.setProperty(f"Camera-{i+1}",'Exposure',self._exposure),
@@ -754,7 +840,7 @@ class Acquisition:
     def _calculate_frames(self):
         '''
         This is an instance function.
-        It is simply a function which calculates the frames
+        It is simply a function which calculates the frames. 
         '''
         self._frames = self._stack_height * self._X * self._Y * self._meta * self._cameras
         self._tiles = self._X * self._Y
@@ -763,7 +849,10 @@ class Acquisition:
         '''
         This is an instance function. 
         This calls the DAQ class to define the waveforms.
-        This does not start the waveforms, only defines them
+        This does not start the waveforms, only defines them. 
+
+        NB:
+        If you want to change the framerate the calibration file should be changed in the DAQ class
         '''
         self.DAQ_VC.program_waveforms(self._stack_height, self._channels)
     
@@ -789,7 +878,11 @@ class Acquisition:
         This is a function that is supposed to be called by the user. 
         First off it starts by checking every input parameter.
         If a parameter is defined by the user, it will be modified. 
+
+        Then it runs all relevant setup functions.
         '''
+
+        #Define parameters to the input
         if z_stepsize is not None:
             self._z_stepsize = z_stepsize
         if x_tiles is not None:
@@ -815,6 +908,7 @@ class Acquisition:
         if trigger_mode is not None:
             self._trigger = trigger_mode
 
+        #Run setup functions
         try:
             self._tile_move = 0.64*(100-overlap)/100
             
@@ -834,10 +928,15 @@ class Acquisition:
 
             self._setup = True
         except Exception as e:
+            # A catch to make sure that the entire program doesn't crash if something wasn't defined or turned on.
             print(f"Something failed in the setup {e}")
 
 
     def _create_threads(self):
+        '''
+        this is an instance function.
+        Create all the relevant threads and only creathe the saving thread if saving is turned on
+        '''
         self._jog_event = threading.Event()
         self._jog_thread = threading.Thread(target= self._jog_threading, daemon=True)
 
@@ -864,19 +963,46 @@ class Acquisition:
             stack_idx: int = None,
             count: int = None
     ):
-        
+        '''
+        This function is linked to a button on the GUI. 
+        It is the function that starts the acquisition. 
+
+        Here the save path is defined
+        The statuses are updated (like self._running)
+        The queue is defined
+        The threasd are created
+        The save files are created
+        The log files are created
+        The stages are enabled and start position is recorded
+        lastly the camera and DAQ is started
+
+        NB:
+        Right now the input of X, Y, count etc. is the fundament to implement crash recovery. 
+        THIS DOES NOT WORK YET AND IS A WIP. 
+        Most importantly, there are no moving into place. The rest of the functions like saving should work but are untested. 
+        '''
+
+        #Check if it should run
         if self._setup == False:
             print('Setup is not done! run MDA.setup_sequence before running it!')
             return
         if self._running:
             print('Acqusition is underway. Stop that one before creating a new one!')
             return
+
+        #update statuses
         self._running = True
         self._pause_status = False
-        self._finished_event.clear()    
+        self._finished_event.clear()
+
+        #Define parameters    
         self._queue = Queue()
         self.setup_save()
+
+        #create the threads
         self._create_threads()
+        self._tstart = time.perf_counter()
+        #Define the parameters by the input
         if X is None:
             self._current_X = 1
         else:
@@ -903,36 +1029,63 @@ class Acquisition:
                 self._stack = 0
             else:
                 self._stack = stack_idx
+
+            #make the necessary setup for saving to occur
             self._setup_tiff()
             self._file_save = open(f"{self._tif_path}_log_save.txt",'w')
             self._save_thread.start()
-            self._tstart = time.perf_counter()
             self._file_save.write(f"stack height: {self._stack_height} \n")
 
+        #Make acquire log and start all threads
         self._file_acquire = open(f"{self._tif_path}_log_acquire.txt",'w')
         self._acquire_thread.start()
         self._jog_thread.start()
         self._stop_sequence_thread.start()
         self._pause_thread.start()
-        
+
+        #Get start position and enable the stages
         self.stages_movement.enable_all()
         self._start_pos = self.stages_movement.get_pos()
+
+        # start the camera
         self.mmc.startContinuousSequenceAcquisition()
-        
-        
+
+        #Start the DAQ
         if self._trigger == 'Edge Trigger':
             self.DAQ_VC.start()
     
     def _stop_threading(self):
+        '''
+        This is an instance function. It runs on a seperate thread
+        The only purpose is to always having the stop working on a seperate thread (so if the main thread freezes, the stop can still go through)
+        '''
         self._stop_sequence_event.wait()
         self.stop_sequence()
 
 
     def stop_sequence(self):
+        '''
+        Technically an instance function. 
+        The main purpose as the name implies is to stop the acquisition. 
+        First it shuts down the DAQ and update statuses.
+        It works then by ensuring we have the expected amount of images (with timeouts in case of failure)
+        It then stops the camera.
+        It then shuts down each thread 
+        Lastly it ensures saving files are closed.
+        finally it updates the running statuses to communicate with the GUI
+
+        NB:
+        It is paramount to avoid missing images that the images are all acquired BEFORE stopping the camera.
+        '''
         try:
+            #stop the camera
             if self._trigger == 'Edge Trigger':
                 self.DAQ_VC.stop()
+
+            #set statuses
             self._pause_status = True
+
+            #Wait for images to reach the buffer
             expected_frames = self._count
             t_pause_start_1 = time.perf_counter()
             while self.mmc.getRemainingImageCount()+self._idx_frame < expected_frames:
@@ -942,6 +1095,8 @@ class Acquisition:
                     self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. The acquire had a timeout while catching up in the stop function.\n")
                     break
                 time.sleep(0.05)
+
+            #Drain the buffer. NB this could theoretically be replaced with self._acquire_event.set(). 
             while self.mmc.getRemainingImageCount() > 0:
                 self._acquire_event.set()
                 if time.perf_counter() - t_pause_start_1 > 10:
@@ -950,11 +1105,14 @@ class Acquisition:
                     break
                 time.sleep(0.05)
 
+            #stop the camera
             if self.mmc.isSequenceRunning():
                 self.mmc.stopSequenceAcquisition()   
-            
+
+            #sets the stop condition for all threads
             self._stop_thread.set()
-            
+
+            # stop and close the acquire thread and its log
             self._acquire_event.set()
             self._acquire_thread.join(timeout = 10)  
             if self._acquire_thread.is_alive():
@@ -962,17 +1120,20 @@ class Acquisition:
             self._file_acquire.write(f"Time: {time.perf_counter()-self._tstart}. Acquisition closed. Frames Acquired vs total frames: {self._idx_frame} vs {self._frames}. Total frames saved: {self._idx_slice+(self._stack_height*self._stack)}.\n")
             self._file_acquire.flush()
             self._file_acquire.close()
-            
+
+            # Stop the Jog thread
             self._jog_event.set()
             self._jog_thread.join(timeout = 10)  
             if self._jog_thread.is_alive():
                 print("WARNING: jog thread did not stop cleanly!")
 
+            # stop the tiling thread
             self._pause_event.set()
             self._pause_thread.join(timeout = 10)
             if self._pause_thread.is_alive():
                 print('WARNING: Pause thread did not stop cleanly!')
-            
+
+            #stop the saving thread and close files if necessary
             if self._save:
                 self._save_thread.join(timeout = 20)
                 if self._save_thread.is_alive():
@@ -989,24 +1150,37 @@ class Acquisition:
                             print(f"couldn't close {chan}: {e}")  
             
         finally:
+            #Set statuses that it's no longer running
             self._running = False
             self._finished_event.set() 
 
     def request_stop(self):
+        '''
+        Simple function for the GUI that stops the acquisition
+        '''
         if self._stop_sequence_event is not None:
             self._stop_sequence_event.set()
 
     def _jog_threading(self):
+        '''
+        This is an instance function. it works on a seperate thread. 
+        The main purpose is to move the stage in the Z direction, whenever it is triggered. 
+        '''
+        #Check stop condition
         while not self._stop_thread.is_set() == True:
+
+            #wait for trigger
             triggered = self._jog_event.wait(timeout=len(self._channels)+1) 
-            
+
             if not triggered:
                 print('Timeout: no trigger received for jog')
                 continue
-
+            
             self._jog_event.clear()
             if self._pause_status:
                 continue
+
+            # move the stages
             self.stages_movement.jog(
             2,
             self._z_stepsize
@@ -1017,7 +1191,10 @@ class Acquisition:
             distance: float,
             axis: int = 2
             ):
-        
+        '''
+        a way of jogging the stages in the acquisition class
+        This is outdated but harmless
+        '''
         self.stages_movement.jog(
             axis,
             distance
@@ -1027,13 +1204,19 @@ class Acquisition:
         self,
         coordinates: np.array
     ):
-        
+        '''
+        This is a function which calls the stage class. 
+        This is used in threads.
+        '''  
         self.stages_movement.move_to(
             coordinates
         )
     
         
     def close(self):
+        '''
+        Close everything and is automatically called on window exit
+        '''
         if self.mmc.isSequenceRunning():
             self.mmc.stopSequenceAcquisition()
         self.mmc.unloadAllDevices()
